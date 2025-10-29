@@ -1,0 +1,27 @@
+# ========================================
+#  GRAFIX – Git attributes
+# ========================================
+
+# --- Normalize text files (use LF everywhere) ---
+* text=auto eol=lf
+
+# --- Treat all source files as UTF-8 ---
+*.py text working-tree-encoding=UTF-8
+*.json text working-tree-encoding=UTF-8
+*.md text working-tree-encoding=UTF-8
+*.txt text working-tree-encoding=UTF-8
+
+# --- Binary files (no diff) ---
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pyd binary
+
+# --- OS-specific metadata (ignore diffs) ---
+.DS_Store binary
+Thumbs.db binary
