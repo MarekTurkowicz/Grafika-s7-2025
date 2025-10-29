@@ -1,0 +1,55 @@
+# ========================================
+#  GRAFIX – .gitignore
+# ========================================
+
+# ---- Python build / cache ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*$py.class
+
+# ---- Virtual environment ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- OS / IDE / Editor files ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# ---- Logs / temporary ----
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# ---- Output / generated ----
+*.json~
+*.txt~
+*.zip
+*.tar
+*.gz
+
+# ---- Python packaging (if later added) ----
+build/
+dist/
+*.egg-info/
+
+# ---- Test / coverage (if added later) ----
+htmlcov/
+.coverage
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache/
+
+# ---- Tkinter or runtime saves ----
+# (np. tymczasowe pliki scen z Grafix)
+*.autosave.jso*
