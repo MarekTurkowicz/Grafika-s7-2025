@@ -98,6 +98,15 @@ class App(tk.Tk):
             side="left", padx=6
         )
 
+        ppmrow = ttk.Frame(panel)
+        ppmrow.grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(ppmrow, text="Wczytaj PPM P3", command=self.load_ppm_p3).pack(
+            side="left"
+        )
+        ttk.Button(ppmrow, text="Wczytaj PPM P6", command=self.load_ppm_p6).pack(
+            side="left", padx=6
+        )
+
         panel.grid_propagate(False)
         panel.configure(width=360)
         panel.columnconfigure(0, weight=1)
@@ -228,7 +237,14 @@ class App(tk.Tk):
         if not self.sel.obj:
             return
         t = type(self.sel.obj).__name__.lower()
-        label = "x1,y1,x2,y2" if t in ("line", "rect") else "cx,cy,r"
+        if t in ("line", "rect"):
+            label = "x1,y1,x2,y2"
+        elif t in ("circle",):
+            label = "cx,cy,r"
+        elif t in ("rasterimage", "image"):
+            label = "x,y,w,h"
+        else:
+            label = "Parametry"
         self.params_label.config(text=f"(wybór) {t}: {label}")
         self.params.delete(0, tk.END)
         self.params.insert(0, self.sel.obj.params_text())
@@ -477,3 +493,50 @@ class App(tk.Tk):
                 self.sel.set(self.canvas, o)
                 self._reflect_selected_to_ui()
                 self._push_history("Rysunek myszą")
+        # --- Wczytywanie PPM (Zadanie 2) ---
+
+    def _place_raster(self, w, h, pixels, src=None):
+        from .shapes.image import RasterImage
+
+        # domyślnie od (10,10)
+        img = RasterImage(10, 10, w, h, pixels, src=src)
+        self._add_object(img)
+        self.sel.set(self.canvas, img)
+        self._reflect_selected_to_ui()
+        self._push_history("Wczytano PPM")
+
+    def load_ppm_p3(self):
+        from tkinter.filedialog import askopenfilename
+        from .io.ppm import read_ppm_p3
+
+        path = askopenfilename(
+            filetypes=[("PPM P3", "*.ppm;*.pnm;*.pbm;*.pgm")], title="Wczytaj PPM P3"
+        )
+        if not path:
+            return
+        try:
+            w, h, pixels = read_ppm_p3(path)
+        except Exception as e:
+            from tkinter import messagebox
+
+            messagebox.showerror("PPM P3", f"Nie udało się wczytać:\n{e}")
+            return
+        self._place_raster(w, h, pixels, src=path)
+
+    def load_ppm_p6(self):
+        from tkinter.filedialog import askopenfilename
+        from .io.ppm import read_ppm_p6
+
+        path = askopenfilename(
+            filetypes=[("PPM P6", "*.ppm;*.pnm")], title="Wczytaj PPM P6"
+        )
+        if not path:
+            return
+        try:
+            w, h, pixels = read_ppm_p6(path)
+        except Exception as e:
+            from tkinter import messagebox
+
+            messagebox.showerror("PPM P6", f"Nie udało się wczytać:\n{e}")
+            return
+        self._place_raster(w, h, pixels, src=path)
