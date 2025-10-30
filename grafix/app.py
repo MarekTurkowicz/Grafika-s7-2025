@@ -9,6 +9,10 @@ from .shapes import Line, Rect, Circle, shape_from_dict
 from .io import save_scene, load_scene, scene_to_dict
 from .render import CanvasSurface
 
+from tkinter.filedialog import asksaveasfilename, askopenfilename
+from .io.jpeg_io import read_jpeg, write_jpeg
+from .image_ops import linear_color_scale
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -22,6 +26,8 @@ class App(tk.Tk):
         self.preview_id = None
         self.mouse_start = None
         self.sel = Selection()
+        self._pix_overlay_mode = "auto"
+        self._pix_overlay_threshold = 8
 
         # Historia
         self.history = []
@@ -100,12 +106,46 @@ class App(tk.Tk):
 
         ppmrow = ttk.Frame(panel)
         ppmrow.grid(row=7, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(ppmrow, text="Wczytaj PPM P3", command=self.load_ppm_p3).pack(
+        ttk.Button(ppmrow, text="Wczytaj PPM (P3/P6)", command=self.load_ppm_auto).pack(
             side="left"
         )
-        ttk.Button(ppmrow, text="Wczytaj PPM P6", command=self.load_ppm_p6).pack(
+
+        # --- JPEG ---
+        jpegs = ttk.Frame(panel)
+        jpegs.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(jpegs, text="Wczytaj JPEG", command=self.load_jpeg).pack(side="left")
+        ttk.Button(jpegs, text="Zapisz jako JPEG…", command=self.save_as_jpeg).pack(
             side="left", padx=6
         )
+
+        # --- Skala kolorów (poziomy) ---
+        levels = ttk.Frame(panel)
+        levels.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(levels, text="Levels in_min,in_max:").pack(side="left")
+        self.levels_entry = ttk.Entry(levels, width=12)
+        self.levels_entry.insert(0, "0,255")
+        self.levels_entry.pack(side="left", padx=4)
+        ttk.Button(levels, text="Zastosuj do obrazu", command=self.apply_levels).pack(
+            side="left"
+        )
+
+        # --- Zoom / Pan ---
+        zoomrow = ttk.Frame(panel)
+        zoomrow.grid(row=10, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(zoomrow, text="Zoom:").pack(side="left")
+        ttk.Button(
+            zoomrow, text="−", width=3, command=lambda: self.change_zoom(-1)
+        ).pack(side="left")
+        ttk.Button(
+            zoomrow, text="+", width=3, command=lambda: self.change_zoom(+1)
+        ).pack(side="left", padx=4)
+        ttk.Label(
+            zoomrow,
+            text="(przy dużym powiększeniu: przesuwaj obraz PPM/JPEG przeciągając)",
+        ).pack(side="left", padx=6)
+
+        # overlay RGB
+        self._pix_overlay_on = True  # można zrobić przełącznik
 
         panel.grid_propagate(False)
         panel.configure(width=360)
@@ -126,7 +166,7 @@ class App(tk.Tk):
             "<Motion>",
             lambda e: self._set_status(f"x={e.x}, y={e.y} | tryb: {self.mode.get()}"),
         )
-
+        self.canvas.bind("<Motion>", self._on_motion)
         self.bind_all("<Control-z>", self.undo)
         self.bind_all("<Control-y>", self.redo)
         self.bind_all("<Control-Shift-Z>", self.redo)
@@ -427,6 +467,7 @@ class App(tk.Tk):
             if dx or dy:
                 self.sel.move_by(self.canvas, dx, dy)
                 self.sel.drag_last = (e.x, e.y)
+                self._update_pixel_overlay()
                 self.params.delete(0, tk.END)
                 self.params.insert(0, self.sel.obj.params_text())
             return
@@ -463,6 +504,7 @@ class App(tk.Tk):
             self._reflect_selected_to_ui()
             self._push_history("Zmiana rozmiaru")
             return
+        self._update_pixel_overlay()
         # finalize draw
         if not self.mouse_start:
             return
@@ -493,7 +535,6 @@ class App(tk.Tk):
                 self.sel.set(self.canvas, o)
                 self._reflect_selected_to_ui()
                 self._push_history("Rysunek myszą")
-        # --- Wczytywanie PPM (Zadanie 2) ---
 
     def _place_raster(self, w, h, pixels, src=None):
         from .shapes.image import RasterImage
@@ -504,6 +545,26 @@ class App(tk.Tk):
         self.sel.set(self.canvas, img)
         self._reflect_selected_to_ui()
         self._push_history("Wczytano PPM")
+
+    def load_ppm_auto(self):
+        from tkinter.filedialog import askopenfilename
+        from tkinter import messagebox
+        from .io.ppm import read_ppm_auto
+
+        path = askopenfilename(
+            filetypes=[("PPM", "*.ppm;*.pnm")], title="Wczytaj PPM (P3/P6)"
+        )
+        if not path:
+            return
+        try:
+            w, h, pixels, fmt = read_ppm_auto(path)  # fmt: "P3" lub "P6"
+        except Exception as e:
+            messagebox.showerror("PPM", f"Nie udało się wczytać pliku PPM:\n{e}")
+            return
+
+        # wstaw obraz jako RasterImage (zachowujemy ścieżkę źródłową)
+        self._place_raster(w, h, pixels, src=path)
+        self._set_status(f"Wczytano {fmt}: {path}")
 
     def load_ppm_p3(self):
         from tkinter.filedialog import askopenfilename
@@ -540,3 +601,259 @@ class App(tk.Tk):
             messagebox.showerror("PPM P6", f"Nie udało się wczytać:\n{e}")
             return
         self._place_raster(w, h, pixels, src=path)
+
+    # --- JPEG ---
+    def load_jpeg(self):
+        path = askopenfilename(
+            filetypes=[("JPEG", "*.jpg;*.jpeg")], title="Wczytaj JPEG"
+        )
+        if not path:
+            return
+        try:
+            w, h, pixels = read_jpeg(path)
+        except Exception as e:
+            messagebox.showerror("JPEG", f"Nie udało się wczytać JPEG:\n{e}")
+            return
+        from .shapes.image import RasterImage
+
+        img = RasterImage(
+            10, 10, src_w=w, src_h=h, src_pixels=pixels, w=w, h=h, src=path
+        )
+        self._add_object(img)
+        self.sel.set(self.canvas, img)
+        self._reflect_selected_to_ui()
+        self._push_history("Wczytano JPEG")
+
+    def save_as_jpeg(self):
+        if not self.sel.obj:
+            messagebox.showinfo("JPEG", "Zaznacz obraz (PPM/JPEG).")
+            return
+        obj = self.sel.obj
+        t = type(obj).__name__.lower()
+        if t not in ("rasterimage", "image"):
+            messagebox.showinfo("JPEG", "Zaznacz obraz (PPM/JPEG).")
+            return
+        # wybór jakości
+        top = tk.Toplevel(self)
+        top.title("Zapis JPEG – jakość")
+        ttk.Label(top, text="Jakość (1–100):").pack(padx=12, pady=(12, 4))
+        qvar = tk.IntVar(value=90)
+        qscale = ttk.Scale(
+            top,
+            from_=1,
+            to=100,
+            orient="horizontal",
+            command=lambda v: qvar.set(int(float(v))),
+        )
+        qscale.set(90)
+        qscale.pack(padx=12, pady=4, fill="x")
+        btns = ttk.Frame(top)
+        btns.pack(pady=8)
+
+        def do_save():
+            path = asksaveasfilename(
+                defaultextension=".jpg",
+                filetypes=[("JPEG", "*.jpg;*.jpeg")],
+                title="Zapisz jako JPEG",
+            )
+            if not path:
+                return
+            try:
+                # zapisujemy BIEŻĄCY widok (w,h) → przeskalowane piksele (nearest)
+                # odtwarzamy piksele podstawowe i skalujemy do w,h:
+                from .shapes.image import RasterImage
+
+                if isinstance(obj, RasterImage):
+                    if obj.w == obj.src_w and obj.h == obj.src_h:
+                        pixels = obj.src_pixels
+                        write_jpeg(
+                            path, obj.src_w, obj.src_h, pixels, quality=qvar.get()
+                        )
+                    else:
+                        # przeskaluj nearest do obj.w,obj.h
+                        dst = obj._scale_nearest(obj.w, obj.h)
+                        write_jpeg(path, obj.w, obj.h, dst, quality=qvar.get())
+                else:
+                    messagebox.showerror(
+                        "JPEG", "Wybrany obiekt nie jest obrazem rastrowym."
+                    )
+                    return
+                messagebox.showinfo("JPEG", f"Zapisano: {path}")
+                top.destroy()
+            except Exception as e:
+                messagebox.showerror("JPEG", f"Nie udało się zapisać JPEG:\n{e}")
+
+        ttk.Button(btns, text="Zapisz", command=do_save).pack(side="left", padx=6)
+        ttk.Button(btns, text="Anuluj", command=top.destroy).pack(side="left", padx=6)
+
+    # --- Levels (liniowe skalowanie kolorów) ---
+    def apply_levels(self):
+        if not self.sel.obj:
+            messagebox.showinfo("Levels", "Zaznacz obraz.")
+            return
+        obj = self.sel.obj
+        from .shapes.image import RasterImage
+
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo("Levels", "Zaznacz obraz PPM/JPEG.")
+            return
+        try:
+            mins, maxs = self.levels_entry.get().replace(";", ",").split(",")
+            in_min, in_max = int(mins.strip()), int(maxs.strip())
+        except Exception:
+            messagebox.showerror("Levels", "Podaj dwie liczby: in_min,in_max (0..255).")
+            return
+        try:
+            obj.src_pixels = linear_color_scale(obj.src_pixels, in_min, in_max)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Levels")
+        except Exception as e:
+            messagebox.showerror("Levels", f"Błąd skalowania kolorów:\n{e}")
+
+    # --- Zoom / Pan ---
+    def change_zoom(self, delta):
+        # Zmieniamy rozmiar WYBRANEGO obrazu (RasterImage) – całkowity zoom o krok (±1) → x2 / x0.5?
+        # Prościej: zoom krokowy o współczynnik 1.25 / 0.8 albo całkowity (1.0 → 2.0 → 4.0).
+        # Tutaj zrobimy zoom całkowity: mnożnik 2 dla +, dzielnik 2 dla −.
+        if not self.sel.obj:
+            self._set_status("Zaznacz obraz, aby zmienić zoom.")
+            return
+        from .shapes.image import RasterImage
+
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            self._set_status("Zoom działa na obrazach PPM/JPEG.")
+            return
+        if delta > 0:
+            new_w = obj.w * 2
+            new_h = obj.h * 2
+        else:
+            new_w = max(1, obj.w // 2)
+            new_h = max(1, obj.h // 2)
+        obj.w, obj.h = int(new_w), int(new_h)
+        obj.update_canvas(self.surface, self.canvas)
+        self.sel._update_visual(self.canvas)
+        self._update_pixel_overlay()
+        self._reflect_selected_to_ui()
+        self._push_history("Zoom")
+
+    def _on_motion(self, e):
+        # status
+        self._set_status(f"x={e.x}, y={e.y} | tryb: {self.mode.get()}")
+        self._update_pixel_overlay(cursor=(e.x, e.y))
+        # overlay RGB tylko dla obrazów
+        if not self._pix_overlay_on:
+            return
+        if not self.sel.obj:
+            self.canvas.delete("pixlbl")
+            return
+        obj = self.sel.obj
+        t = type(obj).__name__.lower()
+        if t not in ("rasterimage", "image"):
+            self.canvas.delete("pixlbl")
+            return
+        px = obj.pixel_at_canvas(e.x, e.y)
+        if px is None:
+            self.canvas.delete("pixlbl")
+            return
+        # pokaż małą etykietę nad pikselem – i tylko przy sensownym zoomie (duża waga: <= tworzyć mało itemów)
+        # Zamiast gęsto na całym obszarze, pokazujemy TYLKO pixel pod kursorem:
+        self.canvas.delete("pixlbl")
+        r, g, b = px
+        txt = f"({r},{g},{b})"
+        self.canvas.create_text(
+            e.x + 30,
+            e.y - 12,
+            text=txt,
+            anchor="w",
+            font=("", 9, "bold"),
+            tags=("pixlbl",),
+            fill="#000",
+        )
+        # kropka w miejscu piksela
+        self.canvas.create_oval(
+            e.x - 1,
+            e.y - 1,
+            e.x + 1,
+            e.y + 1,
+            fill="#000",
+            outline="",
+            tags=("pixlbl",),
+        )
+
+    def _update_pixel_overlay(self, cursor=None):
+        # czyścimy poprzedni overlay
+        self.canvas.delete("pixlbl")
+
+        if self._pix_overlay_mode == "off":
+            return
+        if not self.sel.obj:
+            return
+
+        obj = self.sel.obj
+        t = type(obj).__name__.lower()
+        if t not in ("rasterimage", "image"):
+            return
+
+        # rozmiar jednego wyświetlanego piksela
+        if obj.w is None or obj.h is None or obj.w == 0 or obj.h == 0:
+            return
+        px_w = obj.w / obj.src_w
+        px_h = obj.h / obj.src_h
+        big_enough = (
+            px_w >= self._pix_overlay_threshold and px_h >= self._pix_overlay_threshold
+        )
+
+        # 1) zawsze: RGB pod kursorem (jeśli jest)
+        if cursor is not None:
+            r = obj.pixel_at_canvas(*cursor)
+            if r is not None:
+                r0, g0, b0 = r
+                self.canvas.create_text(
+                    cursor[0] + 30,
+                    cursor[1] - 12,
+                    text=f"({r0},{g0},{b0})",
+                    anchor="w",
+                    font=("", 9, "bold"),
+                    tags=("pixlbl",),
+                    fill="#000",
+                )
+                self.canvas.create_oval(
+                    cursor[0] - 1,
+                    cursor[1] - 1,
+                    cursor[0] + 1,
+                    cursor[1] + 1,
+                    fill="#000",
+                    outline="",
+                    tags=("pixlbl",),
+                )
+
+        # 2) przy dużym zoomie: etykieta na KAŻDYM widocznym pikselu
+        if not big_enough:
+            return
+
+        # ograniczamy się do bboxu obrazu (widoczne piksele)
+        x1, y1, x2, y2 = obj.bbox()
+        # „snapping” do granic wyświetlanych pikseli (siatka)
+        # iterujemy po pikselach źródłowych, mapując je na wyświetlane prostokąty o rozmiarze px_w x px_h
+        # Aby nie przerysowywać całej sceny, robimy etykiety w obrębie widocznych pikseli (prostokąty mieszczące się w bbox).
+        for sy in range(obj.src_h):
+            # y-środek wyświetlanego piksela (w canvas coords)
+            cy = int(obj.y + sy * px_h + px_h / 2)
+            if cy < y1 or cy > y2:
+                continue
+            row_base = sy * obj.src_w
+            for sx in range(obj.src_w):
+                cx = int(obj.x + sx * px_w + px_w / 2)
+                if cx < x1 or cx > x2:
+                    continue
+                rgb = obj.src_pixels[row_base + sx]
+                self.canvas.create_text(
+                    cx,
+                    cy,
+                    text=f"{rgb[0]},{rgb[1]},{rgb[2]}",
+                    anchor="c",
+                    font=("", 8),
+                    tags=("pixlbl",),
+                    fill="#000",
+                )

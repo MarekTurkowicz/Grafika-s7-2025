@@ -178,3 +178,20 @@ class RasterImage(Shape, OidMixin):
 
     def bbox(self):
         return (self.x, self.y, self.x + (self.w or 0), self.y + (self.h or 0))
+
+    def pixel_at_canvas(self, cx: int, cy: int):
+        """Zwraca (r,g,b) piksela źródłowego pod współrzędnymi Canvas (cx,cy),
+        biorąc pod uwagę aktualny rozmiar wyświetlany (w,h) i położenie (x,y).
+        Zwraca None jeśli poza obrazem."""
+        if self.w is None or self.h is None:
+            return None
+        dx, dy = cx - self.x, cy - self.y
+        if dx < 0 or dy < 0 or dx >= self.w or dy >= self.h:
+            return None
+        # mapuj do źródła (nearest)
+        sx = (dx * self.src_w) // self.w
+        sy = (dy * self.src_h) // self.h
+        idx = sy * self.src_w + sx
+        if 0 <= idx < len(self.src_pixels):
+            return self.src_pixels[idx]
+        return None
