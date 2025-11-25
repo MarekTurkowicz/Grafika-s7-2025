@@ -20,13 +20,31 @@ from .rgbcube.cube_sliced import RGBCubeSliceWindow
 from .hsvcone.hsv_cone_window import HSVConeWindow
 from .hsvcone.cone_points import HSVConePointsWindow
 
+from .image_ops import linear_color_scale
+from .image_ops import (
+    add_constant,
+    mul_constant,
+    div_constant,
+    change_brightness,
+    to_grayscale_avg,
+    to_grayscale_luma,
+)
+from .filters import (
+    filter_box_blur,
+    filter_median,
+    filter_sobel,
+    filter_sharpen,
+    filter_gaussian,
+    filter_custom,
+)
+
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(APP_SIZE)
-        self.minsize(900, 600)
+        self.minsize(900, 900)
 
         self.objects = []
         self.mode = tk.StringVar(value="select")
@@ -61,6 +79,11 @@ class App(tk.Tk):
         self.hsv_cone_points_win = None
         self.hsv_cone_win = None
 
+        self.point_add_var = tk.IntVar(value=0)
+        self.point_mul_var = tk.DoubleVar(value=1.0)
+        self.point_div_var = tk.DoubleVar(value=1.0)
+        self.brightness_var = tk.IntVar(value=0)
+
         self._build_ui()
         self._bind_canvas()
 
@@ -73,23 +96,31 @@ class App(tk.Tk):
 
     # --- UI ---
     def _build_ui(self):
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=0)
+        # --- Układ główny okna: canvas + dwa panele po prawej ---
+        self.columnconfigure(0, weight=1)  # canvas
+        self.columnconfigure(1, weight=0)  # panel 1 (rysowanie/plik)
+        self.columnconfigure(2, weight=0)  # panel 2 (kolory/3D/filtry)
         self.rowconfigure(0, weight=1)
         self.rowconfigure(1, weight=0)
 
+        # LEWY: canvas do rysowania sceny
         self.canvas = tk.Canvas(
             self, bg="white", highlightthickness=1, highlightbackground="#ccc"
         )
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
 
-        panel = ttk.Frame(self, padding=8)
-        panel.grid(row=0, column=1, sticky="ns", padx=(4, 8), pady=8)
-        ttk.Label(panel, text="Panel sterowania", font=("", 12, "bold")).grid(
+        # PRAWY 1: podstawowy panel (rysowanie, pliki, zoom, levels)
+        panel1 = ttk.Frame(self, padding=8)
+        panel1.grid(row=0, column=1, sticky="ns", padx=(4, 4), pady=8)
+        panel1.columnconfigure(0, weight=1)
+
+        ttk.Label(panel1, text="Rysowanie / pliki", font=("", 11, "bold")).grid(
             row=0, column=0, sticky="w", pady=(0, 8)
         )
-        modebar = ttk.Frame(panel)
-        modebar.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+
+        # tryb rysowania
+        modebar = ttk.Frame(panel1)
+        modebar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         for text, value in [
             ("Select", "select"),
             ("Line", "line"),
@@ -101,17 +132,19 @@ class App(tk.Tk):
                 text=text,
                 value=value,
                 variable=self.mode,
-                command=self._on_mode_change,  # wywoła odświeżenie podpowiedzi i czyszczenie preview
+                command=self._on_mode_change,
             )
             rb.pack(side="left", padx=4)
 
-        self.params_label = ttk.Label(panel, text="Parametry:")
-        self.params_label.grid(row=3, column=0, sticky="w")
-        self.params = ttk.Entry(panel)
-        self.params.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        # parametry
+        self.params_label = ttk.Label(panel1, text="Parametry:")
+        self.params_label.grid(row=2, column=0, sticky="w")
+        self.params = ttk.Entry(panel1)
+        self.params.grid(row=3, column=0, sticky="ew", pady=(0, 8))
 
-        btnrow = ttk.Frame(panel)
-        btnrow.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        # przyciski: rysuj, zastosuj, wyczyść
+        btnrow = ttk.Frame(panel1)
+        btnrow.grid(row=4, column=0, sticky="ew", pady=(0, 8))
         ttk.Button(btnrow, text="Rysuj z pól", command=self.draw_from_fields).pack(
             side="left"
         )
@@ -122,8 +155,9 @@ class App(tk.Tk):
             side="left", padx=6
         )
 
-        filerow = ttk.Frame(panel)
-        filerow.grid(row=6, column=0, sticky="ew")
+        # zapis / odczyt JSON
+        filerow = ttk.Frame(panel1)
+        filerow.grid(row=5, column=0, sticky="ew")
         ttk.Button(filerow, text="Zapisz JSON", command=self.save_json).pack(
             side="left"
         )
@@ -131,23 +165,24 @@ class App(tk.Tk):
             side="left", padx=6
         )
 
-        ppmrow = ttk.Frame(panel)
-        ppmrow.grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        # PPM
+        ppmrow = ttk.Frame(panel1)
+        ppmrow.grid(row=6, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(ppmrow, text="Wczytaj PPM (P3/P6)", command=self.load_ppm_auto).pack(
             side="left"
         )
 
-        # --- JPEG ---
-        jpegs = ttk.Frame(panel)
-        jpegs.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        # JPEG
+        jpegs = ttk.Frame(panel1)
+        jpegs.grid(row=7, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(jpegs, text="Wczytaj JPEG", command=self.load_jpeg).pack(side="left")
         ttk.Button(jpegs, text="Zapisz jako JPEG…", command=self.save_as_jpeg).pack(
             side="left", padx=6
         )
 
-        # --- Skala kolorów (poziomy) ---
-        levels = ttk.Frame(panel)
-        levels.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        # Levels
+        levels = ttk.Frame(panel1)
+        levels.grid(row=8, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(levels, text="Levels in_min,in_max:").pack(side="left")
         self.levels_entry = ttk.Entry(levels, width=12)
         self.levels_entry.insert(0, "0,255")
@@ -156,10 +191,9 @@ class App(tk.Tk):
             side="left"
         )
 
-        # --- Zoom / Pan ---
-        zoomrow = ttk.Frame(panel)
-        zoomrow.grid(row=10, column=0, sticky="ew", pady=(8, 0))
-
+        # Zoom / Pan
+        zoomrow = ttk.Frame(panel1)
+        zoomrow.grid(row=9, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(zoomrow, text="Zoom:").pack(side="left")
         ttk.Button(
             zoomrow, text="−", width=3, command=lambda: self.change_zoom(-1)
@@ -172,12 +206,22 @@ class App(tk.Tk):
             text="(przy dużym powiększeniu: przesuwaj obraz PPM/JPEG przeciągając)",
         ).pack(side="left", padx=6)
 
+        # PRAWY 2: kolory / kostki / stożki / zad. 4
+        panel2 = ttk.Frame(self, padding=8)
+        panel2.grid(row=0, column=2, sticky="ns", padx=(4, 8), pady=8)
+        panel2.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            panel2, text="Kolor / 3D / przekształcenia", font=("", 11, "bold")
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
         # --- Konwersja kolorów RGB / CMYK ---
-        self._build_color_converter_panel(panel, row=11)
+        # (używamy istniejącej funkcji, tylko inny parent i row)
+        self._build_color_converter_panel(panel2, row=1)
 
         # --- Kostki RGB 3D ---
-        cube_row = ttk.LabelFrame(panel, text="Kostki RGB 3D")
-        cube_row.grid(row=12, column=0, sticky="ew", pady=(8, 0))
+        cube_row = ttk.LabelFrame(panel2, text="Kostki RGB 3D")
+        cube_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
 
         ttk.Button(
             cube_row,
@@ -188,9 +232,10 @@ class App(tk.Tk):
         ttk.Button(
             cube_row, text="Pełna kostka RGB (cięcia)", command=self.open_rgb_cube_slice
         ).pack(side="left", padx=4, pady=2)
+
         # --- Stożki HSV 3D ---
-        hsv_row = ttk.LabelFrame(panel, text="Stożki HSV 3D")
-        hsv_row.grid(row=13, column=0, sticky="ew", pady=(4, 0))
+        hsv_row = ttk.LabelFrame(panel2, text="Stożki HSV 3D")
+        hsv_row.grid(row=3, column=0, sticky="ew", pady=(4, 0))
 
         ttk.Button(
             hsv_row,
@@ -204,16 +249,105 @@ class App(tk.Tk):
             command=self.open_hsv_cone_full,
         ).pack(side="left", padx=4, pady=2)
 
+        # --- Przekształcenia punktowe (zad. 4a) ---
+        pt_frame = ttk.LabelFrame(panel2, text="Przekształcenia punktowe")
+        pt_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        pt_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(pt_frame, text="Dodaj / odejmij:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(pt_frame, textvariable=self.point_add_var, width=8).grid(
+            row=0, column=1, sticky="w", padx=4
+        )
+        ttk.Button(pt_frame, text="Zastosuj ±", command=self.apply_point_add).grid(
+            row=0, column=2, padx=4, pady=2
+        )
+
+        ttk.Label(pt_frame, text="Mnożenie ×:").grid(row=1, column=0, sticky="w")
+        ttk.Entry(pt_frame, textvariable=self.point_mul_var, width=8).grid(
+            row=1, column=1, sticky="w", padx=4
+        )
+        ttk.Button(pt_frame, text="Zastosuj ×", command=self.apply_point_mul).grid(
+            row=1, column=2, padx=4, pady=2
+        )
+
+        ttk.Label(pt_frame, text="Dzielenie ÷:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(pt_frame, textvariable=self.point_div_var, width=8).grid(
+            row=2, column=1, sticky="w", padx=4
+        )
+        ttk.Button(pt_frame, text="Zastosuj ÷", command=self.apply_point_div).grid(
+            row=2, column=2, padx=4, pady=2
+        )
+
+        ttk.Label(pt_frame, text="Jasność (±):").grid(row=3, column=0, sticky="w")
+        ttk.Entry(pt_frame, textvariable=self.brightness_var, width=8).grid(
+            row=3, column=1, sticky="w", padx=4
+        )
+        ttk.Button(pt_frame, text="Zmień jasność", command=self.apply_brightness).grid(
+            row=3, column=2, padx=4, pady=2
+        )
+
+        gray_row = ttk.Frame(pt_frame)
+        gray_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+
+        ttk.Button(
+            gray_row, text="Skala szarości (średnia)", command=self.apply_gray_avg
+        ).pack(side="left", padx=4)
+
+        ttk.Button(
+            gray_row, text="Skala szarości (luma)", command=self.apply_gray_luma
+        ).pack(side="left", padx=4)
+
+        # --- Filtry (zad. 4b) ---
+        filt_frame = ttk.LabelFrame(panel2, text="Filtry (zadanie 4b)")
+        filt_frame.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+
+        ttk.Button(
+            filt_frame,
+            text="Wygładzający (uśredniający)",
+            command=self.apply_filter_box,
+        ).pack(fill="x", pady=1)
+
+        ttk.Button(filt_frame, text="Medianowy", command=self.apply_filter_median).pack(
+            fill="x", pady=1
+        )
+
+        ttk.Button(
+            filt_frame, text="Sobel (krawędzie)", command=self.apply_filter_sobel
+        ).pack(fill="x", pady=1)
+
+        ttk.Button(
+            filt_frame,
+            text="Wyostrzający (górnoprzepustowy)",
+            command=self.apply_filter_sharpen,
+        ).pack(fill="x", pady=1)
+
+        ttk.Button(
+            filt_frame,
+            text="Rozmycie Gaussowskie",
+            command=self.apply_filter_gaussian,
+        ).pack(fill="x", pady=1)
+
+        ttk.Label(filt_frame, text="Maska własna (wiersze po enterze):").pack(
+            fill="x", pady=(6, 0)
+        )
+
+        self.custom_kernel_text = tk.Text(filt_frame, height=4, width=28)
+        self.custom_kernel_text.pack(fill="x", pady=(2, 2))
+        self.custom_kernel_text.insert("1.0", "0 -1 0\n-1 5 -1\n0 -1 0")
+
+        ttk.Button(
+            filt_frame,
+            text="Zastosuj maskę własną",
+            command=self.apply_filter_custom,
+        ).pack(fill="x", pady=(2, 2))
+
         # overlay RGB
-        self._pix_overlay_on = True  # można zrobić przełącznik
+        self._pix_overlay_on = True
 
-        panel.grid_propagate(False)
-        panel.configure(width=360)
-        panel.columnconfigure(0, weight=1)
-
+        # Status bar na dole – teraz przez 3 kolumny
         self.status = tk.StringVar(value="Gotowe.")
         ttk.Label(self, textvariable=self.status, anchor="w", padding=(8, 4)).grid(
-            row=1, column=0, columnspan=2, sticky="ew"
+            row=1, column=0, columnspan=3, sticky="ew"
         )
 
         self._set_params_hint()
@@ -1369,3 +1503,206 @@ class App(tk.Tk):
                     tags=("pixlbl",),
                     fill="#000",
                 )
+
+    # --- Przekształcenia punktowe ---
+
+    def _require_raster_image(self):
+        """Pomocniczo: weź zaznaczony obraz rastrowy lub pokaż komunikat."""
+        if not self.sel.obj:
+            messagebox.showinfo("Obraz", "Zaznacz obraz PPM/JPEG.")
+            return None
+        from .shapes.image import RasterImage
+
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo("Obraz", "Zaznacz obraz PPM/JPEG.")
+            return None
+        return obj
+
+    def apply_point_add(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            val = int(self.point_add_var.get())
+        except Exception:
+            messagebox.showerror("Dodawanie", "Podaj liczbę całkowitą.")
+            return
+        try:
+            obj.src_pixels = add_constant(obj.src_pixels, val)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Dodawanie stałej")
+        except Exception as e:
+            messagebox.showerror("Dodawanie", f"Błąd:\n{e}")
+
+    def apply_point_mul(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            val = float(self.point_mul_var.get())
+        except Exception:
+            messagebox.showerror("Mnożenie", "Podaj liczbę (float).")
+            return
+        try:
+            obj.src_pixels = mul_constant(obj.src_pixels, val)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Mnożenie stałej")
+        except Exception as e:
+            messagebox.showerror("Mnożenie", f"Błąd:\n{e}")
+
+    def apply_point_div(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            val = float(self.point_div_var.get())
+        except Exception:
+            messagebox.showerror("Dzielenie", "Podaj liczbę (float).")
+            return
+        try:
+            obj.src_pixels = div_constant(obj.src_pixels, val)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Dzielenie stałej")
+        except Exception as e:
+            messagebox.showerror("Dzielenie", f"Błąd:\n{e}")
+
+    def apply_brightness(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            delta = int(self.brightness_var.get())
+        except Exception:
+            messagebox.showerror("Jasność", "Podaj liczbę całkowitą.")
+            return
+        try:
+            obj.src_pixels = change_brightness(obj.src_pixels, delta)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Zmiana jasności")
+        except Exception as e:
+            messagebox.showerror("Jasność", f"Błąd:\n{e}")
+
+    def apply_gray_avg(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            obj.src_pixels = to_grayscale_avg(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Skala szarości (średnia)")
+        except Exception as e:
+            messagebox.showerror("Skala szarości", f"Błąd:\n{e}")
+
+    def apply_gray_luma(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            obj.src_pixels = to_grayscale_luma(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Skala szarości (luma)")
+        except Exception as e:
+            messagebox.showerror("Skala szarości", f"Błąd:\n{e}")
+
+    # --- Filtry ---
+    def _require_raster_with_size(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return None, None, None
+        # zakładamy, że RasterImage ma src_w, src_h, src_pixels
+        w = obj.src_w
+        h = obj.src_h
+        return obj, w, h
+
+    def _apply_filter_and_update(self, func, label):
+        obj, w, h = self._require_raster_with_size()
+        if obj is None:
+            return
+        try:
+            new_pixels = func(obj.src_pixels, w, h)
+            obj.src_pixels = new_pixels
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history(label)
+        except Exception as e:
+            messagebox.showerror("Filtr", f"Błąd filtra ({label}):\n{e}")
+
+    def apply_filter_box(self):
+        self._apply_filter_and_update(
+            lambda pixels, w, h: filter_box_blur(pixels, w, h, size=3),
+            "Filtr wygładzający (box blur)",
+        )
+
+    def apply_filter_median(self):
+        self._apply_filter_and_update(
+            lambda pixels, w, h: filter_median(pixels, w, h, size=3),
+            "Filtr medianowy",
+        )
+
+    def apply_filter_sobel(self):
+        self._apply_filter_and_update(
+            lambda pixels, w, h: filter_sobel(pixels, w, h),
+            "Filtr Sobela",
+        )
+
+    def apply_filter_sharpen(self):
+        self._apply_filter_and_update(
+            lambda pixels, w, h: filter_sharpen(pixels, w, h),
+            "Filtr wyostrzający",
+        )
+
+    def apply_filter_gaussian(self):
+
+        self._apply_filter_and_update(
+            lambda pixels, w, h: filter_gaussian(pixels, w, h),
+            "Filtr Gaussa",
+        )
+
+    def apply_filter_custom(self):
+        obj, w, h = self._require_raster_with_size()
+        if obj is None:
+            return
+
+        # Odczyt tekstu z pola
+        raw = self.custom_kernel_text.get("1.0", "end").strip()
+        if not raw:
+            messagebox.showerror(
+                "Maska własna", "Podaj maskę (co najmniej jeden wiersz)."
+            )
+            return
+
+        try:
+            kernel = []
+            # każdy wiersz = jeden rząd maski, liczby oddzielone spacjami
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                row = [float(x) for x in line.replace(",", ".").split()]
+                kernel.append(row)
+
+            if not kernel:
+                raise ValueError("Pusta maska.")
+
+            # sprawdzenie, że maska jest prostokątna
+            width0 = len(kernel[0])
+            if width0 == 0:
+                raise ValueError("Maska musi mieć co najmniej jedną kolumnę.")
+            for r in kernel:
+                if len(r) != width0:
+                    raise ValueError(
+                        "Wszystkie wiersze maski muszą mieć tyle samo elementów."
+                    )
+
+            # można, ale nie trzeba, wymusić nieparzysty rozmiar:
+            if width0 % 2 == 0 or len(kernel) % 2 == 0:
+                # pozwalamy, ale ostrzegamy
+                # messagebox.showwarning("Maska", "Uwaga: najlepiej używać masek o nieparzystym rozmiarze.")
+                pass
+
+            new_pixels = filter_custom(obj.src_pixels, w, h, kernel)
+            obj.src_pixels = new_pixels
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Filtr: maska własna")
+        except Exception as e:
+            messagebox.showerror("Maska własna", f"Błąd parsowania / splotu:\n{e}")
