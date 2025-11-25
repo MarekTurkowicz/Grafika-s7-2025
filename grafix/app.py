@@ -37,6 +37,13 @@ from .filters import (
     filter_gaussian,
     filter_custom,
 )
+from .histogram import compute_histogram, histogram_stretch, histogram_equalize
+from .thresholds import (
+    threshold_manual,
+    threshold_percent_black,
+    threshold_mean_iterative,
+    threshold_entropy,
+)
 
 
 class App(tk.Tk):
@@ -44,7 +51,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(APP_SIZE)
-        self.minsize(900, 900)
+        self.minsize(900, 600)
 
         self.objects = []
         self.mode = tk.StringVar(value="select")
@@ -84,6 +91,10 @@ class App(tk.Tk):
         self.point_div_var = tk.DoubleVar(value=1.0)
         self.brightness_var = tk.IntVar(value=0)
 
+        # --- (HISTOGRAM / BINARYZACJA) ---
+        self.thresh_manual_var = tk.IntVar(value=128)
+        self.thresh_percent_var = tk.DoubleVar(value=50.0)  # Percent Black (%)
+
         self._build_ui()
         self._bind_canvas()
 
@@ -96,29 +107,31 @@ class App(tk.Tk):
 
     # --- UI ---
     def _build_ui(self):
-        # --- Układ główny okna: canvas + dwa panele po prawej ---
+        # --- Główny układ 3 kolumn ---
         self.columnconfigure(0, weight=1)  # canvas
-        self.columnconfigure(1, weight=0)  # panel 1 (rysowanie/plik)
-        self.columnconfigure(2, weight=0)  # panel 2 (kolory/3D/filtry)
+        self.columnconfigure(1, weight=0)  # panel 1 – zad. 1–3
+        self.columnconfigure(2, weight=0)  # panel 2 – zad. 4–5
         self.rowconfigure(0, weight=1)
         self.rowconfigure(1, weight=0)
 
-        # LEWY: canvas do rysowania sceny
+        # ===== CANVAS =====
         self.canvas = tk.Canvas(
             self, bg="white", highlightthickness=1, highlightbackground="#ccc"
         )
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
 
-        # PRAWY 1: podstawowy panel (rysowanie, pliki, zoom, levels)
+        # ======================================================================
+        # == PRAWY PANEL 1 – Zadania 1, 2, 3 (rysowanie, pliki, zoom, kolory, 3D)
+        # ======================================================================
         panel1 = ttk.Frame(self, padding=8)
-        panel1.grid(row=0, column=1, sticky="ns", padx=(4, 4), pady=8)
+        panel1.grid(row=0, column=1, sticky="ns", padx=4, pady=8)
         panel1.columnconfigure(0, weight=1)
 
-        ttk.Label(panel1, text="Rysowanie / pliki", font=("", 11, "bold")).grid(
+        # --- tryby rysowania ---
+        ttk.Label(panel1, text="Rysowanie", font=("", 11, "bold")).grid(
             row=0, column=0, sticky="w", pady=(0, 8)
         )
 
-        # tryb rysowania
         modebar = ttk.Frame(panel1)
         modebar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         for text, value in [
@@ -127,14 +140,13 @@ class App(tk.Tk):
             ("Rect", "rect"),
             ("Circle", "circle"),
         ]:
-            rb = ttk.Radiobutton(
+            ttk.Radiobutton(
                 modebar,
                 text=text,
                 value=value,
                 variable=self.mode,
                 command=self._on_mode_change,
-            )
-            rb.pack(side="left", padx=4)
+            ).pack(side="left", padx=4)
 
         # parametry
         self.params_label = ttk.Label(panel1, text="Parametry:")
@@ -142,209 +154,206 @@ class App(tk.Tk):
         self.params = ttk.Entry(panel1)
         self.params.grid(row=3, column=0, sticky="ew", pady=(0, 8))
 
-        # przyciski: rysuj, zastosuj, wyczyść
-        btnrow = ttk.Frame(panel1)
-        btnrow.grid(row=4, column=0, sticky="ew", pady=(0, 8))
-        ttk.Button(btnrow, text="Rysuj z pól", command=self.draw_from_fields).pack(
+        # przyciski rysowania
+        rbtns = ttk.Frame(panel1)
+        rbtns.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        ttk.Button(rbtns, text="Rysuj", command=self.draw_from_fields).pack(side="left")
+        ttk.Button(rbtns, text="Zastosuj", command=self.apply_to_selected).pack(
+            side="left", padx=4
+        )
+        ttk.Button(rbtns, text="Wyczyść", command=self.clear_all).pack(side="left")
+
+        # JSON
+        jsonrow = ttk.Frame(panel1)
+        jsonrow.grid(row=5, column=0, sticky="ew")
+        ttk.Button(jsonrow, text="Zapisz JSON", command=self.save_json).pack(
             side="left"
         )
-        ttk.Button(
-            btnrow, text="Zastosuj do zaznaczonego", command=self.apply_to_selected
-        ).pack(side="left", padx=6)
-        ttk.Button(btnrow, text="Wyczyść", command=self.clear_all).pack(
-            side="left", padx=6
+        ttk.Button(jsonrow, text="Wczytaj JSON", command=self.load_json).pack(
+            side="left", padx=4
         )
 
-        # zapis / odczyt JSON
-        filerow = ttk.Frame(panel1)
-        filerow.grid(row=5, column=0, sticky="ew")
-        ttk.Button(filerow, text="Zapisz JSON", command=self.save_json).pack(
+        # PPM/JPEG
+        ttk.Button(panel1, text="Wczytaj PPM (P3/P6)", command=self.load_ppm_auto).grid(
+            row=6, column=0, sticky="ew", pady=(8, 0)
+        )
+
+        jpgrow = ttk.Frame(panel1)
+        jpgrow.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(jpgrow, text="Wczytaj JPEG", command=self.load_jpeg).pack(
             side="left"
         )
-        ttk.Button(filerow, text="Wczytaj JSON", command=self.load_json).pack(
-            side="left", padx=6
-        )
-
-        # PPM
-        ppmrow = ttk.Frame(panel1)
-        ppmrow.grid(row=6, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(ppmrow, text="Wczytaj PPM (P3/P6)", command=self.load_ppm_auto).pack(
-            side="left"
-        )
-
-        # JPEG
-        jpegs = ttk.Frame(panel1)
-        jpegs.grid(row=7, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(jpegs, text="Wczytaj JPEG", command=self.load_jpeg).pack(side="left")
-        ttk.Button(jpegs, text="Zapisz jako JPEG…", command=self.save_as_jpeg).pack(
-            side="left", padx=6
+        ttk.Button(jpgrow, text="Zapisz JPEG", command=self.save_as_jpeg).pack(
+            side="left", padx=4
         )
 
         # Levels
         levels = ttk.Frame(panel1)
         levels.grid(row=8, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(levels, text="Levels in_min,in_max:").pack(side="left")
-        self.levels_entry = ttk.Entry(levels, width=12)
+        ttk.Label(levels, text="Levels (min,max):").pack(side="left")
+        self.levels_entry = ttk.Entry(levels, width=10)
         self.levels_entry.insert(0, "0,255")
         self.levels_entry.pack(side="left", padx=4)
-        ttk.Button(levels, text="Zastosuj do obrazu", command=self.apply_levels).pack(
+        ttk.Button(levels, text="OK", command=self.apply_levels).pack(side="left")
+
+        # Zoom
+        zoom = ttk.Frame(panel1)
+        zoom.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(zoom, text="Zoom:").pack(side="left")
+        ttk.Button(zoom, text="−", width=3, command=lambda: self.change_zoom(-1)).pack(
             side="left"
         )
+        ttk.Button(zoom, text="+", width=3, command=lambda: self.change_zoom(+1)).pack(
+            side="left", padx=4
+        )
 
-        # Zoom / Pan
-        zoomrow = ttk.Frame(panel1)
-        zoomrow.grid(row=9, column=0, sticky="ew", pady=(8, 0))
-        ttk.Label(zoomrow, text="Zoom:").pack(side="left")
-        ttk.Button(
-            zoomrow, text="−", width=3, command=lambda: self.change_zoom(-1)
-        ).pack(side="left")
-        ttk.Button(
-            zoomrow, text="+", width=3, command=lambda: self.change_zoom(+1)
-        ).pack(side="left", padx=4)
-        ttk.Label(
-            zoomrow,
-            text="(przy dużym powiększeniu: przesuwaj obraz PPM/JPEG przeciągając)",
-        ).pack(side="left", padx=6)
+        # === Konwersja RGB/CMYK – zadanie 3a ===
+        self._build_color_converter_panel(panel1, row=10)
 
-        # PRAWY 2: kolory / kostki / stożki / zad. 4
+        # === Kostka RGB 3D – zadanie 3b ===
+        cube = ttk.LabelFrame(panel1, text="Kostki RGB 3D")
+        cube.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(cube, text="Kropki", command=self.open_rgb_cube_points).pack(
+            side="left", padx=4, pady=2
+        )
+        ttk.Button(cube, text="Pełna (cięcia)", command=self.open_rgb_cube_slice).pack(
+            side="left", padx=4, pady=2
+        )
+
+        # === Stożek HSV 3D – zadanie 3c ===
+        hsv = ttk.LabelFrame(panel1, text="Stożki HSV 3D")
+        hsv.grid(row=12, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(hsv, text="Punkty", command=self.open_hsv_cone_points).pack(
+            side="left", padx=4, pady=2
+        )
+        ttk.Button(hsv, text="Pełny", command=self.open_hsv_cone_full).pack(
+            side="left", padx=4, pady=2
+        )
+
+        # ======================================================================
+        # == PRAWY PANEL 2 – Zadania 4 (punktowe + filtry) oraz 5 (histogram + binaryzacja)
+        # ======================================================================
         panel2 = ttk.Frame(self, padding=8)
         panel2.grid(row=0, column=2, sticky="ns", padx=(4, 8), pady=8)
         panel2.columnconfigure(0, weight=1)
 
-        ttk.Label(
-            panel2, text="Kolor / 3D / przekształcenia", font=("", 11, "bold")
-        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        # === ZADANIE 4a: Przekształcenia punktowe ===
+        pt = ttk.LabelFrame(panel2, text="Przekształcenia punktowe (4a)")
+        pt.grid(row=0, column=0, sticky="ew")
 
-        # --- Konwersja kolorów RGB / CMYK ---
-        # (używamy istniejącej funkcji, tylko inny parent i row)
-        self._build_color_converter_panel(panel2, row=1)
-
-        # --- Kostki RGB 3D ---
-        cube_row = ttk.LabelFrame(panel2, text="Kostki RGB 3D")
-        cube_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-
-        ttk.Button(
-            cube_row,
-            text="Prosta (kropki)",
-            command=self.open_rgb_cube_points,
-        ).pack(side="left", padx=4, pady=2)
-
-        ttk.Button(
-            cube_row, text="Pełna kostka RGB (cięcia)", command=self.open_rgb_cube_slice
-        ).pack(side="left", padx=4, pady=2)
-
-        # --- Stożki HSV 3D ---
-        hsv_row = ttk.LabelFrame(panel2, text="Stożki HSV 3D")
-        hsv_row.grid(row=3, column=0, sticky="ew", pady=(4, 0))
-
-        ttk.Button(
-            hsv_row,
-            text="Stożek (punkty)",
-            command=self.open_hsv_cone_points,
-        ).pack(side="left", padx=4, pady=2)
-
-        ttk.Button(
-            hsv_row,
-            text="Stożek (pełny)",
-            command=self.open_hsv_cone_full,
-        ).pack(side="left", padx=4, pady=2)
-
-        # --- Przekształcenia punktowe (zad. 4a) ---
-        pt_frame = ttk.LabelFrame(panel2, text="Przekształcenia punktowe")
-        pt_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        pt_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(pt_frame, text="Dodaj / odejmij:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(pt_frame, textvariable=self.point_add_var, width=8).grid(
-            row=0, column=1, sticky="w", padx=4
+        ttk.Label(pt, text="Dodaj/odejmij:").grid(row=0, column=0)
+        ttk.Entry(pt, textvariable=self.point_add_var, width=8).grid(
+            row=0, column=1, padx=4
         )
-        ttk.Button(pt_frame, text="Zastosuj ±", command=self.apply_point_add).grid(
-            row=0, column=2, padx=4, pady=2
+        ttk.Button(pt, text="OK", command=self.apply_point_add).grid(
+            row=0, column=2, padx=4
         )
 
-        ttk.Label(pt_frame, text="Mnożenie ×:").grid(row=1, column=0, sticky="w")
-        ttk.Entry(pt_frame, textvariable=self.point_mul_var, width=8).grid(
-            row=1, column=1, sticky="w", padx=4
+        ttk.Label(pt, text="Mnożenie ×:").grid(row=1, column=0)
+        ttk.Entry(pt, textvariable=self.point_mul_var, width=8).grid(
+            row=1, column=1, padx=4
         )
-        ttk.Button(pt_frame, text="Zastosuj ×", command=self.apply_point_mul).grid(
-            row=1, column=2, padx=4, pady=2
-        )
-
-        ttk.Label(pt_frame, text="Dzielenie ÷:").grid(row=2, column=0, sticky="w")
-        ttk.Entry(pt_frame, textvariable=self.point_div_var, width=8).grid(
-            row=2, column=1, sticky="w", padx=4
-        )
-        ttk.Button(pt_frame, text="Zastosuj ÷", command=self.apply_point_div).grid(
-            row=2, column=2, padx=4, pady=2
+        ttk.Button(pt, text="OK", command=self.apply_point_mul).grid(
+            row=1, column=2, padx=4
         )
 
-        ttk.Label(pt_frame, text="Jasność (±):").grid(row=3, column=0, sticky="w")
-        ttk.Entry(pt_frame, textvariable=self.brightness_var, width=8).grid(
-            row=3, column=1, sticky="w", padx=4
+        ttk.Label(pt, text="Dzielenie ÷:").grid(row=2, column=0)
+        ttk.Entry(pt, textvariable=self.point_div_var, width=8).grid(
+            row=2, column=1, padx=4
         )
-        ttk.Button(pt_frame, text="Zmień jasność", command=self.apply_brightness).grid(
-            row=3, column=2, padx=4, pady=2
+        ttk.Button(pt, text="OK", command=self.apply_point_div).grid(
+            row=2, column=2, padx=4
         )
 
-        gray_row = ttk.Frame(pt_frame)
-        gray_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        ttk.Label(pt, text="Jasność:").grid(row=3, column=0)
+        ttk.Entry(pt, textvariable=self.brightness_var, width=8).grid(
+            row=3, column=1, padx=4
+        )
+        ttk.Button(pt, text="OK", command=self.apply_brightness).grid(
+            row=3, column=2, padx=4
+        )
 
-        ttk.Button(
-            gray_row, text="Skala szarości (średnia)", command=self.apply_gray_avg
-        ).pack(side="left", padx=4)
+        gray = ttk.Frame(pt)
+        gray.grid(row=4, column=0, columnspan=3, pady=(4, 0))
+        ttk.Button(gray, text="Szarość (średnia)", command=self.apply_gray_avg).pack(
+            side="left", padx=4
+        )
+        ttk.Button(gray, text="Szarość (luma)", command=self.apply_gray_luma).pack(
+            side="left", padx=4
+        )
 
-        ttk.Button(
-            gray_row, text="Skala szarości (luma)", command=self.apply_gray_luma
-        ).pack(side="left", padx=4)
+        # === ZADANIE 4b: Filtry ===
+        filt = ttk.LabelFrame(panel2, text="Filtry (4b)")
+        filt.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
-        # --- Filtry (zad. 4b) ---
-        filt_frame = ttk.LabelFrame(panel2, text="Filtry (zadanie 4b)")
-        filt_frame.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-
-        ttk.Button(
-            filt_frame,
-            text="Wygładzający (uśredniający)",
-            command=self.apply_filter_box,
-        ).pack(fill="x", pady=1)
-
-        ttk.Button(filt_frame, text="Medianowy", command=self.apply_filter_median).pack(
+        ttk.Button(filt, text="Uśredniający", command=self.apply_filter_box).pack(
+            fill="x", pady=1
+        )
+        ttk.Button(filt, text="Medianowy", command=self.apply_filter_median).pack(
+            fill="x", pady=1
+        )
+        ttk.Button(filt, text="Sobel", command=self.apply_filter_sobel).pack(
+            fill="x", pady=1
+        )
+        ttk.Button(filt, text="Wyostrzający", command=self.apply_filter_sharpen).pack(
+            fill="x", pady=1
+        )
+        ttk.Button(filt, text="Gauss", command=self.apply_filter_gaussian).pack(
             fill="x", pady=1
         )
 
-        ttk.Button(
-            filt_frame, text="Sobel (krawędzie)", command=self.apply_filter_sobel
-        ).pack(fill="x", pady=1)
-
-        ttk.Button(
-            filt_frame,
-            text="Wyostrzający (górnoprzepustowy)",
-            command=self.apply_filter_sharpen,
-        ).pack(fill="x", pady=1)
-
-        ttk.Button(
-            filt_frame,
-            text="Rozmycie Gaussowskie",
-            command=self.apply_filter_gaussian,
-        ).pack(fill="x", pady=1)
-
-        ttk.Label(filt_frame, text="Maska własna (wiersze po enterze):").pack(
-            fill="x", pady=(6, 0)
+        ttk.Label(filt, text="Maska własna:").pack(fill="x", pady=(6, 0))
+        self.custom_kernel_text = tk.Text(filt, height=4, width=28)
+        self.custom_kernel_text.pack(fill="x", pady=2)
+        self.custom_kernel_text.insert("1.0", "0 -1 0\n-1 5 -1\n0 -1 0")
+        ttk.Button(filt, text="Zastosuj", command=self.apply_filter_custom).pack(
+            fill="x", pady=(2, 2)
         )
 
-        self.custom_kernel_text = tk.Text(filt_frame, height=4, width=28)
-        self.custom_kernel_text.pack(fill="x", pady=(2, 2))
-        self.custom_kernel_text.insert("1.0", "0 -1 0\n-1 5 -1\n0 -1 0")
+        # === ZADANIE 5: Histogram + Binaryzacja ===
+        hist = ttk.LabelFrame(panel2, text="Histogram / Binaryzacja (5)")
+        hist.grid(row=2, column=0, sticky="ew", pady=(8, 0))
 
+        # Histogram
+        top = ttk.Frame(hist)
+        top.grid(row=0, column=0, columnspan=3, pady=4)
+        ttk.Button(top, text="Pokaż", command=self.show_histogram).pack(
+            side="left", padx=2
+        )
+        ttk.Button(top, text="Rozszerz", command=self.apply_hist_stretch).pack(
+            side="left", padx=2
+        )
+        ttk.Button(top, text="Equalizacja", command=self.apply_hist_equalize).pack(
+            side="left", padx=2
+        )
+
+        # Binaryzacja ręczna
+        ttk.Label(hist, text="Próg ręczny:").grid(row=1, column=0)
+        ttk.Entry(hist, textvariable=self.thresh_manual_var, width=6).grid(
+            row=1, column=1, padx=4
+        )
+        ttk.Button(hist, text="OK", command=self.apply_threshold_manual).grid(
+            row=1, column=2, padx=4
+        )
+
+        # Percent Black
+        ttk.Label(hist, text="% Black:").grid(row=2, column=0)
+        ttk.Entry(hist, textvariable=self.thresh_percent_var, width=6).grid(
+            row=2, column=1, padx=4
+        )
+        ttk.Button(hist, text="OK", command=self.apply_threshold_percent_black).grid(
+            row=2, column=2, padx=4
+        )
+
+        # Automatyczne
         ttk.Button(
-            filt_frame,
-            text="Zastosuj maskę własną",
-            command=self.apply_filter_custom,
-        ).pack(fill="x", pady=(2, 2))
+            hist, text="Mean Iterative", command=self.apply_threshold_mean_iterative
+        ).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(4, 2))
+        ttk.Button(hist, text="Entropy", command=self.apply_threshold_entropy).grid(
+            row=4, column=0, columnspan=3, sticky="ew", pady=(2, 4)
+        )
 
-        # overlay RGB
-        self._pix_overlay_on = True
-
-        # Status bar na dole – teraz przez 3 kolumny
+        # STATUS BAR
         self.status = tk.StringVar(value="Gotowe.")
         ttk.Label(self, textvariable=self.status, anchor="w", padding=(8, 4)).grid(
             row=1, column=0, columnspan=3, sticky="ew"
@@ -1706,3 +1715,150 @@ class App(tk.Tk):
             self._push_history("Filtr: maska własna")
         except Exception as e:
             messagebox.showerror("Maska własna", f"Błąd parsowania / splotu:\n{e}")
+
+    # --- Zadanie 5a: Histogram ---
+
+    def show_histogram(self):
+        """Otwiera okno z histogramem jasności (luminancja)."""
+        from .shapes.image import RasterImage
+
+        if not self.sel.obj:
+            messagebox.showinfo("Histogram", "Zaznacz obraz PPM/JPEG.")
+            return
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo("Histogram", "Histogram działa na obrazach PPM/JPEG.")
+            return
+
+        hist = compute_histogram(obj.src_pixels)
+        total = sum(hist) or 1
+        max_count = max(hist) or 1
+
+        top = tk.Toplevel(self)
+        top.title("Histogram jasności (luminancja)")
+        cv = tk.Canvas(top, width=512, height=200, bg="white")
+        cv.pack(fill="both", expand=True)
+
+        # oś X: 0..255 (rozciągnięte na szerokość 512 px, czyli 2 px na bin)
+        w = 512
+        h = 200
+        for i, count in enumerate(hist):
+            x0 = i * 2
+            x1 = x0 + 2
+            # wysokość słupka proporcjonalna do max_count
+            bar_h = int(count / max_count * (h - 20))
+            y0 = h - bar_h
+            y1 = h
+            cv.create_rectangle(x0, y0, x1, y1, fill="#444", outline="")
+
+        cv.create_line(0, h - 1, w, h - 1, fill="black")
+        cv.create_text(10, 10, anchor="nw", text=f"N = {total}", fill="black")
+
+    def apply_hist_stretch(self):
+        """Rozszerzenie histogramu dla zaznaczonego obrazu."""
+        from .shapes.image import RasterImage
+
+        if not self.sel.obj:
+            messagebox.showinfo("Histogram", "Zaznacz obraz PPM/JPEG.")
+            return
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo("Histogram", "Histogram działa na obrazach PPM/JPEG.")
+            return
+
+        try:
+            obj.src_pixels = histogram_stretch(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Histogram – rozszerzenie")
+        except Exception as e:
+            messagebox.showerror("Histogram", f"Błąd rozszerzania histogramu:\n{e}")
+
+    def apply_hist_equalize(self):
+        """Equalizacja histogramu dla zaznaczonego obrazu."""
+        from .shapes.image import RasterImage
+
+        if not self.sel.obj:
+            messagebox.showinfo("Histogram", "Zaznacz obraz PPM/JPEG.")
+            return
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo("Histogram", "Histogram działa na obrazach PPM/JPEG.")
+            return
+
+        try:
+            obj.src_pixels = histogram_equalize(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Histogram – equalizacja")
+        except Exception as e:
+            messagebox.showerror("Histogram", f"Błąd equalizacji histogramu:\n{e}")
+
+    # --- Zadanie 5b: Binaryzacja ---
+
+    def _require_raster_image(self):
+        """Pomocniczo: pobierz zaznaczony obraz rastrowy."""
+        from .shapes.image import RasterImage
+
+        if not self.sel.obj:
+            messagebox.showinfo("Binaryzacja", "Zaznacz obraz PPM/JPEG.")
+            return None
+        obj = self.sel.obj
+        if not isinstance(obj, RasterImage):
+            messagebox.showinfo(
+                "Binaryzacja", "Operacje działają na obrazach PPM/JPEG."
+            )
+            return None
+        return obj
+
+    def apply_threshold_manual(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            T = int(self.thresh_manual_var.get())
+        except Exception:
+            messagebox.showerror("Binaryzacja", "Podaj próg 0..255.")
+            return
+        try:
+            obj.src_pixels = threshold_manual(obj.src_pixels, T)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history(f"Binaryzacja ręczna T={T}")
+        except Exception as e:
+            messagebox.showerror("Binaryzacja", f"Błąd binaryzacji ręcznej:\n{e}")
+
+    def apply_threshold_percent_black(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            p = float(self.thresh_percent_var.get())
+        except Exception:
+            messagebox.showerror("Binaryzacja", "Podaj procent czarnego (0..100).")
+            return
+        try:
+            obj.src_pixels = threshold_percent_black(obj.src_pixels, p)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history(f"Binaryzacja Percent Black ({p:.1f}%)")
+        except Exception as e:
+            messagebox.showerror("Binaryzacja", f"Błąd Percent Black:\n{e}")
+
+    def apply_threshold_mean_iterative(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            obj.src_pixels = threshold_mean_iterative(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Binaryzacja Mean Iterative")
+        except Exception as e:
+            messagebox.showerror("Binaryzacja", f"Błąd Mean Iterative:\n{e}")
+
+    def apply_threshold_entropy(self):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            obj.src_pixels = threshold_entropy(obj.src_pixels)
+            obj.update_canvas(self.surface, self.canvas)
+            self._push_history("Binaryzacja Entropy")
+        except Exception as e:
+            messagebox.showerror("Binaryzacja", f"Błąd Entropy:\n{e}")
