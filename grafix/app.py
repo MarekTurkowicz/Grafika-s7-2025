@@ -13,7 +13,6 @@ from tkinter.filedialog import asksaveasfilename, askopenfilename
 from .io.jpeg_io import read_jpeg, write_jpeg
 from .image_ops import linear_color_scale
 
-from .color_models import rgb_to_cmyk, cmyk_to_rgb
 
 from .rgbcube.cube_points import RGBCubePointsWindow
 from .rgbcube.cube_sliced import RGBCubeSliceWindow
@@ -100,6 +99,7 @@ class App(tk.Tk):
 
         # --- Bezier Editor ---
         self.bezier_editor_win = None
+        self.polygon_editor_win = None  # okno do zadania 7 (wielokąty)
 
         self._build_ui()
         self._bind_canvas()
@@ -376,6 +376,16 @@ class App(tk.Tk):
             command=self.open_bezier_editor,
         ).pack(side="left", padx=4, pady=4)
 
+        # === Zadanie 7: wielokąty ===
+        poly_frame = ttk.LabelFrame(panel2, text="Wielokąty (zad. 7)")
+        poly_frame.grid(
+            row=3, column=0, sticky="ew", pady=(8, 0)
+        )  # K daj większe niż poprzedni wiersz
+        ttk.Button(
+            poly_frame,
+            text="Edytor wielokątów (zad. 7)",
+            command=self.open_polygon_editor,
+        ).pack(fill="x", padx=2, pady=4)
         # --- Overlay pikseli ---
         self._pix_overlay_on = True
 
@@ -2225,3 +2235,22 @@ class App(tk.Tk):
                 self.bezier_editor_win = None
 
         self.bezier_editor_win = BezierEditorWindow(self)
+
+    def open_polygon_editor(self):
+        """Otwiera okno edytora wielokątów (zadanie 7)."""
+        try:
+            from .polygons.editor import PolygonEditorWindow
+        except Exception:
+            # awaryjnie, gdy projekt odpalany bez pakietu
+            from polygons.editor import PolygonEditorWindow  # type: ignore
+
+        if (
+            getattr(self, "polygon_editor_win", None) is not None
+            and self.polygon_editor_win.winfo_exists()
+        ):
+            self.polygon_editor_win.lift()
+            self.polygon_editor_win.focus_set()
+            return
+
+        self.polygon_editor_win = PolygonEditorWindow(self)
+        self.polygon_editor_win.transient(self)
