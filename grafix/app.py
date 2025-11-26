@@ -44,6 +44,7 @@ from .thresholds import (
     threshold_mean_iterative,
     threshold_entropy,
 )
+from .bezier.editor import BezierEditorWindow
 
 
 class App(tk.Tk):
@@ -51,7 +52,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(APP_SIZE)
-        self.minsize(900, 600)
+        self.minsize(1600, 900)
 
         self.objects = []
         self.mode = tk.StringVar(value="select")
@@ -67,6 +68,8 @@ class App(tk.Tk):
         self._suspend_history = False
 
         self.color_mode = tk.StringVar(value="RGB")
+        self._in_color_update = False
+
         # RGB wejściowe
         self.rgb_r_var = tk.IntVar(value=255)
         self.rgb_g_var = tk.IntVar(value=0)
@@ -95,6 +98,9 @@ class App(tk.Tk):
         self.thresh_manual_var = tk.IntVar(value=128)
         self.thresh_percent_var = tk.DoubleVar(value=50.0)  # Percent Black (%)
 
+        # --- Bezier Editor ---
+        self.bezier_editor_win = None
+
         self._build_ui()
         self._bind_canvas()
 
@@ -105,35 +111,33 @@ class App(tk.Tk):
 
         self._push_history("Start")
 
-    # --- UI ---
+        # --- UI ---
+
     def _build_ui(self):
         # --- Główny układ 3 kolumn ---
         self.columnconfigure(0, weight=1)  # canvas
-        self.columnconfigure(1, weight=0)  # panel 1 – zad. 1–3
-        self.columnconfigure(2, weight=0)  # panel 2 – zad. 4–5
+        self.columnconfigure(1, weight=0)  # panel 1 – zad. 1–3 + 4a
+        self.columnconfigure(2, weight=0)  # panel 2 – zad. 4b + 5 + 6
         self.rowconfigure(0, weight=1)
         self.rowconfigure(1, weight=0)
 
-        # ===== CANVAS =====
+        # ===== LEWA STRONA: CANVAS =====
         self.canvas = tk.Canvas(
             self, bg="white", highlightthickness=1, highlightbackground="#ccc"
         )
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
 
-        # ======================================================================
-        # == PRAWY PANEL 1 – Zadania 1, 2, 3 (rysowanie, pliki, zoom, kolory, 3D)
-        # ======================================================================
         panel1 = ttk.Frame(self, padding=8)
         panel1.grid(row=0, column=1, sticky="ns", padx=4, pady=8)
         panel1.columnconfigure(0, weight=1)
 
-        # --- tryby rysowania ---
+        # --- Rysowanie (zad. 1) ---
         ttk.Label(panel1, text="Rysowanie", font=("", 11, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 8)
+            row=0, column=0, sticky="w", pady=(0, 6)
         )
 
         modebar = ttk.Frame(panel1)
-        modebar.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        modebar.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         for text, value in [
             ("Select", "select"),
             ("Line", "line"),
@@ -146,24 +150,24 @@ class App(tk.Tk):
                 value=value,
                 variable=self.mode,
                 command=self._on_mode_change,
-            ).pack(side="left", padx=4)
+            ).pack(side="left", padx=2)
 
-        # parametry
         self.params_label = ttk.Label(panel1, text="Parametry:")
         self.params_label.grid(row=2, column=0, sticky="w")
         self.params = ttk.Entry(panel1)
-        self.params.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        self.params.grid(row=3, column=0, sticky="ew", pady=(0, 6))
 
-        # przyciski rysowania
         rbtns = ttk.Frame(panel1)
-        rbtns.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        rbtns.grid(row=4, column=0, sticky="ew", pady=(0, 6))
         ttk.Button(rbtns, text="Rysuj", command=self.draw_from_fields).pack(side="left")
         ttk.Button(rbtns, text="Zastosuj", command=self.apply_to_selected).pack(
             side="left", padx=4
         )
-        ttk.Button(rbtns, text="Wyczyść", command=self.clear_all).pack(side="left")
+        ttk.Button(rbtns, text="Wyczyść", command=self.clear_all).pack(
+            side="left", padx=4
+        )
 
-        # JSON
+        # --- Pliki sceny (JSON) (zad. 1) ---
         jsonrow = ttk.Frame(panel1)
         jsonrow.grid(row=5, column=0, sticky="ew")
         ttk.Button(jsonrow, text="Zapisz JSON", command=self.save_json).pack(
@@ -173,13 +177,13 @@ class App(tk.Tk):
             side="left", padx=4
         )
 
-        # PPM/JPEG
+        # --- PPM / JPEG (zad. 2) ---
         ttk.Button(panel1, text="Wczytaj PPM (P3/P6)", command=self.load_ppm_auto).grid(
             row=6, column=0, sticky="ew", pady=(8, 0)
         )
 
         jpgrow = ttk.Frame(panel1)
-        jpgrow.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        jpgrow.grid(row=7, column=0, sticky="ew", pady=(4, 0))
         ttk.Button(jpgrow, text="Wczytaj JPEG", command=self.load_jpeg).pack(
             side="left"
         )
@@ -187,7 +191,7 @@ class App(tk.Tk):
             side="left", padx=4
         )
 
-        # Levels
+        # --- Levels (zad. 2 – liniowe skalowanie kolorów) ---
         levels = ttk.Frame(panel1)
         levels.grid(row=8, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(levels, text="Levels (min,max):").pack(side="left")
@@ -196,9 +200,9 @@ class App(tk.Tk):
         self.levels_entry.pack(side="left", padx=4)
         ttk.Button(levels, text="OK", command=self.apply_levels).pack(side="left")
 
-        # Zoom
+        # --- Zoom (zad. 2 – powiększanie) ---
         zoom = ttk.Frame(panel1)
-        zoom.grid(row=9, column=0, sticky="ew", pady=(8, 0))
+        zoom.grid(row=9, column=0, sticky="ew", pady=(6, 0))
         ttk.Label(zoom, text="Zoom:").pack(side="left")
         ttk.Button(zoom, text="−", width=3, command=lambda: self.change_zoom(-1)).pack(
             side="left"
@@ -207,12 +211,12 @@ class App(tk.Tk):
             side="left", padx=4
         )
 
-        # === Konwersja RGB/CMYK – zadanie 3a ===
+        # --- Konwerter RGB/CMYK (zad. 3a) ---
         self._build_color_converter_panel(panel1, row=10)
 
-        # === Kostka RGB 3D – zadanie 3b ===
+        # --- Kostki RGB 3D (zad. 3b) ---
         cube = ttk.LabelFrame(panel1, text="Kostki RGB 3D")
-        cube.grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        cube.grid(row=11, column=0, sticky="ew", pady=(6, 0))
         ttk.Button(cube, text="Kropki", command=self.open_rgb_cube_points).pack(
             side="left", padx=4, pady=2
         )
@@ -220,9 +224,9 @@ class App(tk.Tk):
             side="left", padx=4, pady=2
         )
 
-        # === Stożek HSV 3D – zadanie 3c ===
+        # --- Stożki HSV 3D (zad. 3c) ---
         hsv = ttk.LabelFrame(panel1, text="Stożki HSV 3D")
-        hsv.grid(row=12, column=0, sticky="ew", pady=(6, 0))
+        hsv.grid(row=12, column=0, sticky="ew", pady=(4, 0))
         ttk.Button(hsv, text="Punkty", command=self.open_hsv_cone_points).pack(
             side="left", padx=4, pady=2
         )
@@ -230,16 +234,9 @@ class App(tk.Tk):
             side="left", padx=4, pady=2
         )
 
-        # ======================================================================
-        # == PRAWY PANEL 2 – Zadania 4 (punktowe + filtry) oraz 5 (histogram + binaryzacja)
-        # ======================================================================
-        panel2 = ttk.Frame(self, padding=8)
-        panel2.grid(row=0, column=2, sticky="ns", padx=(4, 8), pady=8)
-        panel2.columnconfigure(0, weight=1)
-
-        # === ZADANIE 4a: Przekształcenia punktowe ===
-        pt = ttk.LabelFrame(panel2, text="Przekształcenia punktowe (4a)")
-        pt.grid(row=0, column=0, sticky="ew")
+        # --- Przekształcenia punktowe (zad. 4a) ---
+        pt = ttk.LabelFrame(panel1, text="Przekształcenia punktowe (4a)")
+        pt.grid(row=13, column=0, sticky="ew", pady=(6, 0))
 
         ttk.Label(pt, text="Dodaj/odejmij:").grid(row=0, column=0)
         ttk.Entry(pt, textvariable=self.point_add_var, width=8).grid(
@@ -282,9 +279,16 @@ class App(tk.Tk):
             side="left", padx=4
         )
 
-        # === ZADANIE 4b: Filtry ===
+        # ======================================================================
+        # == PANEL 2 (kolumna 2): Zadanie 4b (filtry) + zadanie 5 + 6 (Bézier)
+        # ======================================================================
+        panel2 = ttk.Frame(self, padding=8)
+        panel2.grid(row=0, column=2, sticky="ns", padx=(4, 8), pady=8)
+        panel2.columnconfigure(0, weight=1)
+
+        # --- Filtry (zad. 4b) ---
         filt = ttk.LabelFrame(panel2, text="Filtry (4b)")
-        filt.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        filt.grid(row=0, column=0, sticky="ew")
 
         ttk.Button(filt, text="Uśredniający", command=self.apply_filter_box).pack(
             fill="x", pady=1
@@ -292,68 +296,90 @@ class App(tk.Tk):
         ttk.Button(filt, text="Medianowy", command=self.apply_filter_median).pack(
             fill="x", pady=1
         )
-        ttk.Button(filt, text="Sobel", command=self.apply_filter_sobel).pack(
-            fill="x", pady=1
-        )
+        ttk.Button(
+            filt, text="Sobel (krawędzie)", command=self.apply_filter_sobel
+        ).pack(fill="x", pady=1)
         ttk.Button(filt, text="Wyostrzający", command=self.apply_filter_sharpen).pack(
             fill="x", pady=1
         )
-        ttk.Button(filt, text="Gauss", command=self.apply_filter_gaussian).pack(
-            fill="x", pady=1
-        )
+        ttk.Button(
+            filt, text="Gauss (rozmycie)", command=self.apply_filter_gaussian
+        ).pack(fill="x", pady=1)
 
         ttk.Label(filt, text="Maska własna:").pack(fill="x", pady=(6, 0))
-        self.custom_kernel_text = tk.Text(filt, height=4, width=28)
+        self.custom_kernel_text = tk.Text(filt, height=4, width=24)
         self.custom_kernel_text.pack(fill="x", pady=2)
         self.custom_kernel_text.insert("1.0", "0 -1 0\n-1 5 -1\n0 -1 0")
-        ttk.Button(filt, text="Zastosuj", command=self.apply_filter_custom).pack(
-            fill="x", pady=(2, 2)
-        )
+        ttk.Button(
+            filt, text="Zastosuj maskę własną", command=self.apply_filter_custom
+        ).pack(fill="x", pady=(2, 2))
 
-        # === ZADANIE 5: Histogram + Binaryzacja ===
+        # --- Histogram / Binaryzacja (zad. 5) ---
         hist = ttk.LabelFrame(panel2, text="Histogram / Binaryzacja (5)")
-        hist.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        hist.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        hist.columnconfigure(1, weight=1)
 
-        # Histogram
-        top = ttk.Frame(hist)
-        top.grid(row=0, column=0, columnspan=3, pady=4)
-        ttk.Button(top, text="Pokaż", command=self.show_histogram).pack(
+        # Histogram – 3 przyciski
+        hrow = ttk.Frame(hist)
+        hrow.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(2, 4))
+        ttk.Button(hrow, text="Pokaż", command=self.show_histogram).pack(
             side="left", padx=2
         )
-        ttk.Button(top, text="Rozszerz", command=self.apply_hist_stretch).pack(
+        ttk.Button(hrow, text="Rozszerz", command=self.apply_hist_stretch).pack(
             side="left", padx=2
         )
-        ttk.Button(top, text="Equalizacja", command=self.apply_hist_equalize).pack(
+        ttk.Button(hrow, text="Equalizacja", command=self.apply_hist_equalize).pack(
             side="left", padx=2
         )
 
         # Binaryzacja ręczna
-        ttk.Label(hist, text="Próg ręczny:").grid(row=1, column=0)
-        ttk.Entry(hist, textvariable=self.thresh_manual_var, width=6).grid(
-            row=1, column=1, padx=4
+        brow1 = ttk.Frame(hist)
+        brow1.grid(row=1, column=0, columnspan=3, sticky="ew", pady=1)
+        ttk.Label(brow1, text="Próg ręczny:").pack(side="left")
+        ttk.Entry(brow1, textvariable=self.thresh_manual_var, width=6).pack(
+            side="left", padx=4
         )
-        ttk.Button(hist, text="OK", command=self.apply_threshold_manual).grid(
-            row=1, column=2, padx=4
+        ttk.Button(brow1, text="OK", command=self.apply_threshold_manual).pack(
+            side="left"
         )
 
         # Percent Black
-        ttk.Label(hist, text="% Black:").grid(row=2, column=0)
-        ttk.Entry(hist, textvariable=self.thresh_percent_var, width=6).grid(
-            row=2, column=1, padx=4
+        brow2 = ttk.Frame(hist)
+        brow2.grid(row=2, column=0, columnspan=3, sticky="ew", pady=1)
+        ttk.Label(brow2, text="% Black:").pack(side="left")
+        ttk.Entry(brow2, textvariable=self.thresh_percent_var, width=6).pack(
+            side="left", padx=4
         )
-        ttk.Button(hist, text="OK", command=self.apply_threshold_percent_black).grid(
-            row=2, column=2, padx=4
+        ttk.Button(brow2, text="OK", command=self.apply_threshold_percent_black).pack(
+            side="left"
         )
 
-        # Automatyczne
+        # Automatyczne progi
         ttk.Button(
-            hist, text="Mean Iterative", command=self.apply_threshold_mean_iterative
+            hist,
+            text="Mean Iterative",
+            command=self.apply_threshold_mean_iterative,
         ).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(4, 2))
-        ttk.Button(hist, text="Entropy", command=self.apply_threshold_entropy).grid(
-            row=4, column=0, columnspan=3, sticky="ew", pady=(2, 4)
-        )
 
-        # STATUS BAR
+        ttk.Button(
+            hist,
+            text="Entropy",
+            command=self.apply_threshold_entropy,
+        ).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 4))
+
+        # --- Krzywa Béziera (zadanie 6) ---
+        bez = ttk.LabelFrame(panel2, text="Krzywa Béziera (6)")
+        bez.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(
+            bez,
+            text="Edytor krzywej Béziera",
+            command=self.open_bezier_editor,
+        ).pack(side="left", padx=4, pady=4)
+
+        # --- Overlay pikseli ---
+        self._pix_overlay_on = True
+
+        # --- Status bar ---
         self.status = tk.StringVar(value="Gotowe.")
         ttk.Label(self, textvariable=self.status, anchor="w", padding=(8, 4)).grid(
             row=1, column=0, columnspan=3, sticky="ew"
@@ -1024,6 +1050,136 @@ class App(tk.Tk):
         from tkinter import ttk
 
         self.rgb_inputs_frame = ttk.Frame(parent)
+
+        # R
+        ttk.Label(self.rgb_inputs_frame, text="R:").grid(row=0, column=0, sticky="e")
+        self.rgb_r_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("R", v),
+        )
+        self.rgb_r_scale.grid(row=0, column=1, sticky="ew", padx=6)
+
+        self.rgb_r_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_r_entry.insert(0, str(self.rgb_r_var.get()))
+        self.rgb_r_entry.grid(row=0, column=2)
+        self.rgb_r_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("R"))
+        self.rgb_r_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("R"))
+
+        # dopiero TERAZ ustawiamy pozycję suwaka (po stworzeniu entry)
+        self.rgb_r_scale.set(self.rgb_r_var.get())
+
+        # G
+        ttk.Label(self.rgb_inputs_frame, text="G:").grid(row=1, column=0, sticky="e")
+        self.rgb_g_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("G", v),
+        )
+        self.rgb_g_scale.grid(row=1, column=1, sticky="ew", padx=6)
+
+        self.rgb_g_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_g_entry.insert(0, str(self.rgb_g_var.get()))
+        self.rgb_g_entry.grid(row=1, column=2)
+        self.rgb_g_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("G"))
+        self.rgb_g_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("G"))
+
+        self.rgb_g_scale.set(self.rgb_g_var.get())
+
+        # B
+        ttk.Label(self.rgb_inputs_frame, text="B:").grid(row=2, column=0, sticky="e")
+        self.rgb_b_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("B", v),
+        )
+        self.rgb_b_scale.grid(row=2, column=1, sticky="ew", padx=6)
+
+        self.rgb_b_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_b_entry.insert(0, str(self.rgb_b_var.get()))
+        self.rgb_b_entry.grid(row=2, column=2)
+        self.rgb_b_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("B"))
+        self.rgb_b_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("B"))
+
+        self.rgb_b_scale.set(self.rgb_b_var.get())
+
+        self.rgb_inputs_frame.columnconfigure(1, weight=1)
+
+        """Wejścia RGB: suwaki 0-255 + pola tekstowe."""
+        from tkinter import ttk
+
+        self.rgb_inputs_frame = ttk.Frame(parent)
+
+        # R
+        ttk.Label(self.rgb_inputs_frame, text="R:").grid(row=0, column=0, sticky="e")
+        self.rgb_r_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("R", v),
+        )
+        self.rgb_r_scale.grid(row=0, column=1, sticky="ew", padx=6)
+
+        self.rgb_r_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_r_entry.insert(0, str(self.rgb_r_var.get()))
+        self.rgb_r_entry.grid(row=0, column=2)
+        self.rgb_r_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("R"))
+        self.rgb_r_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("R"))
+
+        # dopiero teraz ustawiamy pozycję suwaka (po utworzeniu entry)
+        self.rgb_r_scale.set(self.rgb_r_var.get())
+
+        # G
+        ttk.Label(self.rgb_inputs_frame, text="G:").grid(row=1, column=0, sticky="e")
+        self.rgb_g_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("G", v),
+        )
+        self.rgb_g_scale.grid(row=1, column=1, sticky="ew", padx=6)
+
+        self.rgb_g_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_g_entry.insert(0, str(self.rgb_g_var.get()))
+        self.rgb_g_entry.grid(row=1, column=2)
+        self.rgb_g_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("G"))
+        self.rgb_g_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("G"))
+
+        self.rgb_g_scale.set(self.rgb_g_var.get())
+
+        # B
+        ttk.Label(self.rgb_inputs_frame, text="B:").grid(row=2, column=0, sticky="e")
+        self.rgb_b_scale = ttk.Scale(
+            self.rgb_inputs_frame,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            command=lambda v: self._on_rgb_slider_changed("B", v),
+        )
+        self.rgb_b_scale.grid(row=2, column=1, sticky="ew", padx=6)
+
+        self.rgb_b_entry = ttk.Entry(self.rgb_inputs_frame, width=5)
+        self.rgb_b_entry.insert(0, str(self.rgb_b_var.get()))
+        self.rgb_b_entry.grid(row=2, column=2)
+        self.rgb_b_entry.bind("<Return>", lambda e: self._on_rgb_entry_changed("B"))
+        self.rgb_b_entry.bind("<FocusOut>", lambda e: self._on_rgb_entry_changed("B"))
+
+        self.rgb_b_scale.set(self.rgb_b_var.get())
+
+        self.rgb_inputs_frame.columnconfigure(1, weight=1)
+
+        """Wejścia RGB: suwaki 0-255 + pola tekstowe."""
+        from tkinter import ttk
+
+        self.rgb_inputs_frame = ttk.Frame(parent)
         # R
         ttk.Label(self.rgb_inputs_frame, text="R:").grid(row=0, column=0, sticky="e")
         self.rgb_r_scale = ttk.Scale(
@@ -1078,6 +1234,97 @@ class App(tk.Tk):
         self.rgb_inputs_frame.columnconfigure(1, weight=1)
 
     def _build_cmyk_inputs(self, parent):
+        """Wejścia CMYK: suwaki 0-100% + pola tekstowe (wartości w %)."""
+        from tkinter import ttk
+
+        self.cmyk_inputs_frame = ttk.Frame(parent)
+
+        # C
+        ttk.Label(self.cmyk_inputs_frame, text="C (%):").grid(
+            row=0, column=0, sticky="e"
+        )
+        self.cmyk_c_scale = ttk.Scale(
+            self.cmyk_inputs_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            command=lambda v: self._on_cmyk_slider_changed("C", v),
+        )
+        self.cmyk_c_scale.grid(row=0, column=1, sticky="ew", padx=6)
+
+        self.cmyk_c_entry = ttk.Entry(self.cmyk_inputs_frame, width=5)
+        self.cmyk_c_entry.insert(0, f"{self.cmyk_c_var.get():.1f}")
+        self.cmyk_c_entry.grid(row=0, column=2)
+        self.cmyk_c_entry.bind("<Return>", lambda e: self._on_cmyk_entry_changed("C"))
+        self.cmyk_c_entry.bind("<FocusOut>", lambda e: self._on_cmyk_entry_changed("C"))
+
+        self.cmyk_c_scale.set(self.cmyk_c_var.get())
+
+        # M
+        ttk.Label(self.cmyk_inputs_frame, text="M (%):").grid(
+            row=1, column=0, sticky="e"
+        )
+        self.cmyk_m_scale = ttk.Scale(
+            self.cmyk_inputs_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            command=lambda v: self._on_cmyk_slider_changed("M", v),
+        )
+        self.cmyk_m_scale.grid(row=1, column=1, sticky="ew", padx=6)
+
+        self.cmyk_m_entry = ttk.Entry(self.cmyk_inputs_frame, width=5)
+        self.cmyk_m_entry.insert(0, f"{self.cmyk_m_var.get():.1f}")
+        self.cmyk_m_entry.grid(row=1, column=2)
+        self.cmyk_m_entry.bind("<Return>", lambda e: self._on_cmyk_entry_changed("M"))
+        self.cmyk_m_entry.bind("<FocusOut>", lambda e: self._on_cmyk_entry_changed("M"))
+
+        self.cmyk_m_scale.set(self.cmyk_m_var.get())
+
+        # Y
+        ttk.Label(self.cmyk_inputs_frame, text="Y (%):").grid(
+            row=2, column=0, sticky="e"
+        )
+        self.cmyk_y_scale = ttk.Scale(
+            self.cmyk_inputs_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            command=lambda v: self._on_cmyk_slider_changed("Y", v),
+        )
+        self.cmyk_y_scale.grid(row=2, column=1, sticky="ew", padx=6)
+
+        self.cmyk_y_entry = ttk.Entry(self.cmyk_inputs_frame, width=5)
+        self.cmyk_y_entry.insert(0, f"{self.cmyk_y_var.get():.1f}")
+        self.cmyk_y_entry.grid(row=2, column=2)
+        self.cmyk_y_entry.bind("<Return>", lambda e: self._on_cmyk_entry_changed("Y"))
+        self.cmyk_y_entry.bind("<FocusOut>", lambda e: self._on_cmyk_entry_changed("Y"))
+
+        self.cmyk_y_scale.set(self.cmyk_y_var.get())
+
+        # K
+        ttk.Label(self.cmyk_inputs_frame, text="K (%):").grid(
+            row=3, column=0, sticky="e"
+        )
+        self.cmyk_k_scale = ttk.Scale(
+            self.cmyk_inputs_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            command=lambda v: self._on_cmyk_slider_changed("K", v),
+        )
+        self.cmyk_k_scale.grid(row=3, column=1, sticky="ew", padx=6)
+
+        self.cmyk_k_entry = ttk.Entry(self.cmyk_inputs_frame, width=5)
+        self.cmyk_k_entry.insert(0, f"{self.cmyk_k_var.get():.1f}")
+        self.cmyk_k_entry.grid(row=3, column=2)
+        self.cmyk_k_entry.bind("<Return>", lambda e: self._on_cmyk_entry_changed("K"))
+        self.cmyk_k_entry.bind("<FocusOut>", lambda e: self._on_cmyk_entry_changed("K"))
+
+        self.cmyk_k_scale.set(self.cmyk_k_var.get())
+
+        self.cmyk_inputs_frame.columnconfigure(1, weight=1)
+
         """Wejścia CMYK: suwaki 0-100% + pola tekstowe (wartości w %)."""
         from tkinter import ttk
 
@@ -1171,135 +1418,6 @@ class App(tk.Tk):
         self.rgb_inputs_frame.grid_forget()
         self.cmyk_inputs_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
 
-    def _on_color_mode_changed(self):
-        mode = self.color_mode.get()
-        if mode == "RGB":
-            # przechodzimy z CMYK -> RGB, więc RGB ma odpowiadać aktualnemu CMYK
-            self._sync_rgb_from_cmyk()
-            self._show_rgb_inputs()
-        else:
-            # przechodzimy z RGB -> CMYK, więc CMYK ma odpowiadać aktualnemu RGB
-            self._sync_cmyk_from_rgb()
-            self._show_cmyk_inputs()
-
-        # Po synchronizacji odświeżamy podgląd i etykiety
-        self._update_color_conversion()
-
-    # --- Handlery RGB ---
-
-    def _on_rgb_slider_changed(self, channel, value):
-        v = int(float(value))
-        if channel == "R":
-            self.rgb_r_var.set(v)
-            self.rgb_r_entry.delete(0, "end")
-            self.rgb_r_entry.insert(0, str(v))
-        elif channel == "G":
-            self.rgb_g_var.set(v)
-            self.rgb_g_entry.delete(0, "end")
-            self.rgb_g_entry.insert(0, str(v))
-        else:
-            self.rgb_b_var.set(v)
-            self.rgb_b_entry.delete(0, "end")
-            self.rgb_b_entry.insert(0, str(v))
-        self._update_color_conversion()
-
-    def _on_rgb_entry_changed(self, channel):
-        entry = {"R": self.rgb_r_entry, "G": self.rgb_g_entry, "B": self.rgb_b_entry}[
-            channel
-        ]
-        try:
-            v = int(entry.get())
-        except ValueError:
-            v = 0
-        v = max(0, min(255, v))
-        entry.delete(0, "end")
-        entry.insert(0, str(v))
-        if channel == "R":
-            self.rgb_r_var.set(v)
-            self.rgb_r_scale.set(v)
-        elif channel == "G":
-            self.rgb_g_var.set(v)
-            self.rgb_g_scale.set(v)
-        else:
-            self.rgb_b_var.set(v)
-            self.rgb_b_scale.set(v)
-        self._update_color_conversion()
-
-    # --- Handlery CMYK ---
-
-    def _on_cmyk_slider_changed(self, channel, value):
-        v = max(0.0, min(100.0, float(value)))
-        if channel == "C":
-            self.cmyk_c_var.set(v)
-            self.cmyk_c_entry.delete(0, "end")
-            self.cmyk_c_entry.insert(0, f"{v:.1f}")
-        elif channel == "M":
-            self.cmyk_m_var.set(v)
-            self.cmyk_m_entry.delete(0, "end")
-            self.cmyk_m_entry.insert(0, f"{v:.1f}")
-        elif channel == "Y":
-            self.cmyk_y_var.set(v)
-            self.cmyk_y_entry.delete(0, "end")
-            self.cmyk_y_entry.insert(0, f"{v:.1f}")
-        else:
-            self.cmyk_k_var.set(v)
-            self.cmyk_k_entry.delete(0, "end")
-            self.cmyk_k_entry.insert(0, f"{v:.1f}")
-        self._update_color_conversion()
-
-    def _on_cmyk_entry_changed(self, channel):
-        entry = {
-            "C": self.cmyk_c_entry,
-            "M": self.cmyk_m_entry,
-            "Y": self.cmyk_y_entry,
-            "K": self.cmyk_k_entry,
-        }[channel]
-        try:
-            v = float(entry.get().replace(",", "."))
-        except ValueError:
-            v = 0.0
-        v = max(0.0, min(100.0, v))
-        entry.delete(0, "end")
-        entry.insert(0, f"{v:.1f}")
-        if channel == "C":
-            self.cmyk_c_var.set(v)
-            self.cmyk_c_scale.set(v)
-        elif channel == "M":
-            self.cmyk_m_var.set(v)
-            self.cmyk_m_scale.set(v)
-        elif channel == "Y":
-            self.cmyk_y_var.set(v)
-            self.cmyk_y_scale.set(v)
-        else:
-            self.cmyk_k_var.set(v)
-            self.cmyk_k_scale.set(v)
-        self._update_color_conversion()
-
-    # --- Przeliczanie + podgląd ---
-
-    def _update_color_conversion(self):
-        mode = self.color_mode.get()
-        if mode == "RGB":
-            r, g, b = self.rgb_r_var.get(), self.rgb_g_var.get(), self.rgb_b_var.get()
-            c, m, y, k = rgb_to_cmyk(r, g, b)
-            self._update_color_preview(r, g, b)
-            self.result_label_1.config(text=f"RGB: {r}, {g}, {b}")
-            self.result_label_2.config(
-                text=f"CMYK: {c*100:.1f}%, {m*100:.1f}%, {y*100:.1f}%, {k*100:.1f}%"
-            )
-        else:
-            c = self.cmyk_c_var.get() / 100.0
-            m = self.cmyk_m_var.get() / 100.0
-            y = self.cmyk_y_var.get() / 100.0
-            k = self.cmyk_k_var.get() / 100.0
-            r, g, b = cmyk_to_rgb(c, m, y, k)
-            self._update_color_preview(r, g, b)
-            self.result_label_1.config(text=f"RGB: {r}, {g}, {b}")
-            self.result_label_2.config(
-                text=f"CMYK: {self.cmyk_c_var.get():.1f}%, {self.cmyk_m_var.get():.1f}%, {self.cmyk_y_var.get():.1f}%, {self.cmyk_k_var.get():.1f}%"
-            )
-
-    def _update_color_preview(self, r, g, b):
         r = max(0, min(255, int(r)))
         g = max(0, min(255, int(g)))
         b = max(0, min(255, int(b)))
@@ -1307,15 +1425,179 @@ class App(tk.Tk):
         self.color_preview.delete("all")
         self.color_preview.create_rectangle(0, 0, 68, 44, fill=hex_color, outline="")
 
-    def _sync_cmyk_from_rgb(self):
-        """Ustaw CMYK tak, żeby odpowiadał aktualnemu RGB."""
+    def _on_color_mode_changed(self):
+        """Przełączanie trybu wejściowego RGB/CMYK."""
+        mode = self.color_mode.get()
+
+        # Jeżeli UI nie jest jeszcze gotowe (np. podczas budowy panelu) – po prostu wyjdź.
+        if not hasattr(self, "rgb_r_var") or not hasattr(self, "cmyk_c_var"):
+            return
+
+        if mode == "RGB":
+            # Chcemy, żeby suwaki/pola RGB pokazywały to, co teraz jest w CMYK
+            self._update_ui_from_cmyk()
+            self._show_rgb_inputs()
+        else:
+            # Chcemy, żeby suwaki/pola CMYK pokazywały aktualne RGB
+            self._update_ui_from_rgb()
+            self._show_cmyk_inputs()
+
+        self._update_color_conversion()
+
+    def _on_rgb_slider_changed(self, channel: str, value: str):
+        """Callback suwaków RGB."""
+        # Jeżeli aktualizujemy programowo inne kontrolki, to ignorujemy callback,
+        # żeby nie zrobić pętli.
+        if getattr(self, "_in_color_update", False):
+            return
+
+        self._in_color_update = True
+        try:
+            v = int(float(value))
+            v = max(0, min(255, v))
+
+            if channel == "R":
+                self.rgb_r_var.set(v)
+                if hasattr(self, "rgb_r_entry"):
+                    self.rgb_r_entry.delete(0, "end")
+                    self.rgb_r_entry.insert(0, str(v))
+            elif channel == "G":
+                self.rgb_g_var.set(v)
+                if hasattr(self, "rgb_g_entry"):
+                    self.rgb_g_entry.delete(0, "end")
+                    self.rgb_g_entry.insert(0, str(v))
+            elif channel == "B":
+                self.rgb_b_var.set(v)
+                if hasattr(self, "rgb_b_entry"):
+                    self.rgb_b_entry.delete(0, "end")
+                    self.rgb_b_entry.insert(0, str(v))
+
+            # Po zmianie RGB – przelicz CMYK i zaktualizuj całą resztę UI
+            self._update_ui_from_rgb()
+        finally:
+            self._in_color_update = False
+
+        self._update_color_conversion()
+
+    def _on_rgb_entry_changed(self, channel):
+        """Zmiana wartości w polach tekstowych RGB."""
+        entry = {
+            "R": self.rgb_r_entry,
+            "G": self.rgb_g_entry,
+            "B": self.rgb_b_entry,
+        }[channel]
+
+        try:
+            v = int(entry.get())
+        except Exception:
+            v = 0
+
+        v = max(0, min(255, v))
+        entry.delete(0, "end")
+        entry.insert(0, str(v))
+
+        if channel == "R":
+            self.rgb_r_var.set(v)
+            if hasattr(self, "rgb_r_scale"):
+                self.rgb_r_scale.set(v)
+        elif channel == "G":
+            self.rgb_g_var.set(v)
+            if hasattr(self, "rgb_g_scale"):
+                self.rgb_g_scale.set(v)
+        else:
+            self.rgb_b_var.set(v)
+            if hasattr(self, "rgb_b_scale"):
+                self.rgb_b_scale.set(v)
+
+        # Pole tekstowe traktujemy jak wejście użytkownika – więc normalnie przeliczamy
+        self._update_ui_from_rgb()
+        self._update_color_conversion()
+
+    def _on_cmyk_slider_changed(self, channel: str, value: str):
+        """Callback suwaków CMYK (wartości w %)."""
+        if getattr(self, "_in_color_update", False):
+            return
+
+        self._in_color_update = True
+        try:
+            v = float(value)
+            v = max(0.0, min(100.0, v))
+
+            if channel == "C":
+                self.cmyk_c_var.set(v)
+                if hasattr(self, "cmyk_c_entry"):
+                    self.cmyk_c_entry.delete(0, "end")
+                    self.cmyk_c_entry.insert(0, f"{v:.1f}")
+            elif channel == "M":
+                self.cmyk_m_var.set(v)
+                if hasattr(self, "cmyk_m_entry"):
+                    self.cmyk_m_entry.delete(0, "end")
+                    self.cmyk_m_entry.insert(0, f"{v:.1f}")
+            elif channel == "Y":
+                self.cmyk_y_var.set(v)
+                if hasattr(self, "cmyk_y_entry"):
+                    self.cmyk_y_entry.delete(0, "end")
+                    self.cmyk_y_entry.insert(0, f"{v:.1f}")
+            else:  # "K"
+                self.cmyk_k_var.set(v)
+                if hasattr(self, "cmyk_k_entry"):
+                    self.cmyk_k_entry.delete(0, "end")
+                    self.cmyk_k_entry.insert(0, f"{v:.1f}")
+
+            # Po zmianie CMYK – przelicz RGB i zaktualizuj UI
+            self._update_ui_from_cmyk()
+        finally:
+            self._in_color_update = False
+
+        self._update_color_conversion()
+
+    def _on_cmyk_entry_changed(self, channel):
+        """Zmiana wartości w polach tekstowych CMYK (%)."""
+        entry = {
+            "C": self.cmyk_c_entry,
+            "M": self.cmyk_m_entry,
+            "Y": self.cmyk_y_entry,
+            "K": self.cmyk_k_entry,
+        }[channel]
+
+        try:
+            v = float(entry.get().replace(",", "."))
+        except Exception:
+            v = 0.0
+
+        v = max(0.0, min(100.0, v))
+        entry.delete(0, "end")
+        entry.insert(0, f"{v:.1f}")
+
+        if channel == "C":
+            self.cmyk_c_var.set(v)
+            if hasattr(self, "cmyk_c_scale"):
+                self.cmyk_c_scale.set(v)
+        elif channel == "M":
+            self.cmyk_m_var.set(v)
+            if hasattr(self, "cmyk_m_scale"):
+                self.cmyk_m_scale.set(v)
+        elif channel == "Y":
+            self.cmyk_y_var.set(v)
+            if hasattr(self, "cmyk_y_scale"):
+                self.cmyk_y_scale.set(v)
+        else:
+            self.cmyk_k_var.set(v)
+            if hasattr(self, "cmyk_k_scale"):
+                self.cmyk_k_scale.set(v)
+
+        self._update_ui_from_cmyk()
+        self._update_color_conversion()
+
+    def _update_ui_from_rgb(self):
+        """Konwersja RGB -> CMYK i aktualizacja suwaków/pól CMYK (bez zapętlania)."""
+        from .color_models import rgb_to_cmyk
+
         r = self.rgb_r_var.get()
         g = self.rgb_g_var.get()
         b = self.rgb_b_var.get()
 
         c, m, y, k = rgb_to_cmyk(r, g, b)
-
-        # zapisujemy w % (0-100)
         c_p = c * 100.0
         m_p = m * 100.0
         y_p = y * 100.0
@@ -1326,23 +1608,34 @@ class App(tk.Tk):
         self.cmyk_y_var.set(y_p)
         self.cmyk_k_var.set(k_p)
 
-        # zsynchronizuj suwaki i pola tekstowe
-        self.cmyk_c_scale.set(c_p)
-        self.cmyk_m_scale.set(m_p)
-        self.cmyk_y_scale.set(y_p)
-        self.cmyk_k_scale.set(k_p)
+        # suwaki
+        if hasattr(self, "cmyk_c_scale"):
+            self.cmyk_c_scale.set(c_p)
+        if hasattr(self, "cmyk_m_scale"):
+            self.cmyk_m_scale.set(m_p)
+        if hasattr(self, "cmyk_y_scale"):
+            self.cmyk_y_scale.set(y_p)
+        if hasattr(self, "cmyk_k_scale"):
+            self.cmyk_k_scale.set(k_p)
 
-        self.cmyk_c_entry.delete(0, "end")
-        self.cmyk_c_entry.insert(0, f"{c_p:.1f}")
-        self.cmyk_m_entry.delete(0, "end")
-        self.cmyk_m_entry.insert(0, f"{m_p:.1f}")
-        self.cmyk_y_entry.delete(0, "end")
-        self.cmyk_y_entry.insert(0, f"{y_p:.1f}")
-        self.cmyk_k_entry.delete(0, "end")
-        self.cmyk_k_entry.insert(0, f"{k_p:.1f}")
+        # pola tekstowe
+        if hasattr(self, "cmyk_c_entry"):
+            self.cmyk_c_entry.delete(0, "end")
+            self.cmyk_c_entry.insert(0, f"{c_p:.1f}")
+        if hasattr(self, "cmyk_m_entry"):
+            self.cmyk_m_entry.delete(0, "end")
+            self.cmyk_m_entry.insert(0, f"{m_p:.1f}")
+        if hasattr(self, "cmyk_y_entry"):
+            self.cmyk_y_entry.delete(0, "end")
+            self.cmyk_y_entry.insert(0, f"{y_p:.1f}")
+        if hasattr(self, "cmyk_k_entry"):
+            self.cmyk_k_entry.delete(0, "end")
+            self.cmyk_k_entry.insert(0, f"{k_p:.1f}")
 
-    def _sync_rgb_from_cmyk(self):
-        """Ustaw RGB tak, żeby odpowiadał aktualnemu CMYK."""
+    def _update_ui_from_cmyk(self):
+        """Konwersja CMYK -> RGB i aktualizacja suwaków/pól RGB (bez zapętlania)."""
+        from .color_models import cmyk_to_rgb
+
         c = self.cmyk_c_var.get() / 100.0
         m = self.cmyk_m_var.get() / 100.0
         y = self.cmyk_y_var.get() / 100.0
@@ -1354,16 +1647,75 @@ class App(tk.Tk):
         self.rgb_g_var.set(g)
         self.rgb_b_var.set(b)
 
-        self.rgb_r_scale.set(r)
-        self.rgb_g_scale.set(g)
-        self.rgb_b_scale.set(b)
+        # suwaki
+        if hasattr(self, "rgb_r_scale"):
+            self.rgb_r_scale.set(r)
+        if hasattr(self, "rgb_g_scale"):
+            self.rgb_g_scale.set(g)
+        if hasattr(self, "rgb_b_scale"):
+            self.rgb_b_scale.set(b)
 
-        self.rgb_r_entry.delete(0, "end")
-        self.rgb_r_entry.insert(0, str(r))
-        self.rgb_g_entry.delete(0, "end")
-        self.rgb_g_entry.insert(0, str(g))
-        self.rgb_b_entry.delete(0, "end")
-        self.rgb_b_entry.insert(0, str(b))
+        # pola tekstowe
+        if hasattr(self, "rgb_r_entry"):
+            self.rgb_r_entry.delete(0, "end")
+            self.rgb_r_entry.insert(0, str(r))
+        if hasattr(self, "rgb_g_entry"):
+            self.rgb_g_entry.delete(0, "end")
+            self.rgb_g_entry.insert(0, str(g))
+        if hasattr(self, "rgb_b_entry"):
+            self.rgb_b_entry.delete(0, "end")
+            self.rgb_b_entry.insert(0, str(b))
+
+    def _update_color_conversion(self):
+        """Aktualizacja napisów + preview na podstawie aktualnego trybu."""
+        # Jeśli UI jeszcze nie jest gotowe – nic nie rób.
+        if not hasattr(self, "result_label_1") or not hasattr(self, "result_label_2"):
+            return
+
+        mode = self.color_mode.get()
+        if mode == "RGB":
+            r = self.rgb_r_var.get()
+            g = self.rgb_g_var.get()
+            b = self.rgb_b_var.get()
+            from .color_models import rgb_to_cmyk
+
+            c, m, y, k = rgb_to_cmyk(r, g, b)
+            self._update_color_preview(r, g, b)
+            self.result_label_1.config(text=f"RGB: {r}, {g}, {b}")
+            self.result_label_2.config(
+                text=f"CMYK: {c*100:.1f}%, {m*100:.1f}%, {y*100:.1f}%, {k*100:.1f}%"
+            )
+        else:
+            c = self.cmyk_c_var.get() / 100.0
+            m = self.cmyk_m_var.get() / 100.0
+            y = self.cmyk_y_var.get() / 100.0
+            k = self.cmyk_k_var.get() / 100.0
+            from .color_models import cmyk_to_rgb
+
+            r, g, b = cmyk_to_rgb(c, m, y, k)
+            self._update_color_preview(r, g, b)
+            self.result_label_1.config(text=f"RGB: {r}, {g}, {b}")
+            self.result_label_2.config(
+                text=(
+                    f"CMYK: {self.cmyk_c_var.get():.1f}%, "
+                    f"{self.cmyk_m_var.get():.1f}%, "
+                    f"{self.cmyk_y_var.get():.1f}%, "
+                    f"{self.cmyk_k_var.get():.1f}%"
+                )
+            )
+
+    def _update_color_preview(self, r, g, b):
+        """Aktualizacja prostokąta podglądu koloru."""
+        if not hasattr(self, "color_preview"):
+            return
+
+        r = max(0, min(255, int(r)))
+        g = max(0, min(255, int(g)))
+        b = max(0, min(255, int(b)))
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+
+        self.color_preview.delete("all")
+        self.color_preview.create_rectangle(0, 0, 68, 44, fill=hex_color, outline="")
 
     # --- Zoom / Pan ---
     def change_zoom(self, delta):
@@ -1862,3 +2214,14 @@ class App(tk.Tk):
             self._push_history("Binaryzacja Entropy")
         except Exception as e:
             messagebox.showerror("Binaryzacja", f"Błąd Entropy:\n{e}")
+
+    def open_bezier_editor(self):
+        """Otwiera (lub fokusuje) okno edytora krzywej Béziera."""
+        if getattr(self, "bezier_editor_win", None) is not None:
+            try:
+                self.bezier_editor_win.lift()
+                return
+            except Exception:
+                self.bezier_editor_win = None
+
+        self.bezier_editor_win = BezierEditorWindow(self)
