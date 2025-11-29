@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import math
+import colorsys
 
 from .constants import APP_TITLE, APP_SIZE, COL_PREV
 from .utils import parts
@@ -51,7 +52,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(APP_SIZE)
-        self.minsize(1600, 900)
+        self.minsize(1600, 1200)
 
         self.objects = []
         self.mode = tk.StringVar(value="select")
@@ -101,6 +102,17 @@ class App(tk.Tk):
         self.bezier_editor_win = None
         self.polygon_editor_win = None  # okno do zadania 7 (wielokąty)
 
+        # --- Analiza koloru / terenów zielonych ---
+        self.color_h_min_var = tk.DoubleVar(
+            value=70.0
+        )  # początek zakresu H (stopnie) – zieleń ~70°
+        self.color_h_max_var = tk.DoubleVar(
+            value=160.0
+        )  # koniec zakresu H – zieleń ~160°
+        self.color_s_min_var = tk.DoubleVar(value=0.2)  # minimalne nasycenie
+        self.color_v_min_var = tk.DoubleVar(value=0.2)  # minimalna jasność
+        self.green_result_var = tk.StringVar(value="Brak obliczeń.")
+
         self._build_ui()
         self._bind_canvas()
 
@@ -110,8 +122,6 @@ class App(tk.Tk):
         self.canvas._surface = self.surface
 
         self._push_history("Start")
-
-        # --- UI ---
 
     def _build_ui(self):
         # --- Główny układ 3 kolumn ---
@@ -441,6 +451,42 @@ class App(tk.Tk):
             text="Hit-or-miss (pogrubianie)",
             command=self.apply_morph_thicken,
         ).pack(side="left", padx=2)
+
+        # === ZADANIE 9: Analiza koloru (np. terenów zielonych) ===
+        color_an = ttk.LabelFrame(panel2, text="Analiza koloru (9)")
+        color_an.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        color_an.columnconfigure(1, weight=1)
+
+        # Zakres barwy H w stopniach (0..360)
+        ttk.Label(color_an, text="Zakres H [°]:").grid(row=0, column=0, sticky="w")
+        hfrm = ttk.Frame(color_an)
+        hfrm.grid(row=0, column=1, sticky="ew")
+        ttk.Entry(hfrm, textvariable=self.color_h_min_var, width=5).pack(side="left")
+        ttk.Label(hfrm, text="–").pack(side="left")
+        ttk.Entry(hfrm, textvariable=self.color_h_max_var, width=5).pack(side="left")
+
+        # Minimalne S i V (nasycenie, jasność)
+        ttk.Label(color_an, text="Min S, Min V:").grid(row=1, column=0, sticky="w")
+        svfrm = ttk.Frame(color_an)
+        svfrm.grid(row=1, column=1, sticky="ew")
+        ttk.Entry(svfrm, textvariable=self.color_s_min_var, width=5).pack(side="left")
+        ttk.Entry(svfrm, textvariable=self.color_v_min_var, width=5).pack(
+            side="left", padx=(4, 0)
+        )
+
+        # Przycisk obliczania
+        ttk.Button(
+            color_an,
+            text="Policz pokrycie kolorem",
+            command=self.compute_color_coverage,
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 2))
+
+        # Etykieta z wynikiem
+        ttk.Label(
+            color_an,
+            textvariable=self.green_result_var,
+            foreground="darkgreen",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     def _bind_canvas(self):
         self.canvas.bind("<Button-1>", self.on_down)
@@ -2510,3 +2556,53 @@ class App(tk.Tk):
 
     def apply_morph_thicken(self):
         self._apply_morph("thicken", "Morfologia – hit-or-miss (pogrubianie)")
+
+    def compute_color_coverage(self):
+        """Liczy, jaki procent obrazu spełnia warunki koloru (domyślnie zieleń)."""
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+
+        try:
+            h_min = float(self.color_h_min_var.get())
+            h_max = float(self.color_h_max_var.get())
+            s_min = float(self.color_s_min_var.get())
+            v_min = float(self.color_v_min_var.get())
+        except Exception:
+            messagebox.showerror(
+                "Analiza koloru",
+                "Podaj poprawne wartości liczbowe dla zakresu H, S i V.",
+            )
+            return
+
+        # normalizacja zakresu H do [0, 360] i upewnienie się, że min <= max
+        h_min = max(0.0, min(360.0, h_min))
+        h_max = max(0.0, min(360.0, h_max))
+        if h_max < h_min:
+            h_min, h_max = h_max, h_min
+
+        pixels = obj.src_pixels
+        total = len(pixels)
+        if total == 0:
+            messagebox.showinfo("Analiza koloru", "Obraz jest pusty.")
+            return
+
+        count = 0
+        # Pętla po pikselach – konwersja RGB -> HSV (stdlib: colorsys)
+        for r, g, b in pixels:
+            rn = r / 255.0
+            gn = g / 255.0
+            bn = b / 255.0
+            h, s, v = colorsys.rgb_to_hsv(rn, gn, bn)
+            h_deg = h * 360.0
+
+            if h_min <= h_deg <= h_max and s >= s_min and v >= v_min:
+                count += 1
+
+        percent = 100.0 * count / total
+        text = (
+            f"Pokrycie kolorem (H∈[{h_min:.1f}°, {h_max:.1f}°], "
+            f"S≥{s_min:.2f}, V≥{v_min:.2f}): {percent:.2f}%"
+        )
+        self.green_result_var.set(text)
+        self._set_status(text)
