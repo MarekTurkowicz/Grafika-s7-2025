@@ -397,6 +397,51 @@ class App(tk.Tk):
 
         self._set_params_hint()
 
+        # === ZADANIE 8: Morfologia (operacje na obrazach binarnych) ===
+        morph = ttk.LabelFrame(panel2, text="Morfologia (8)")
+        morph.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+
+        ttk.Label(
+            morph,
+            text="Element strukturyzujący (0/1, opcj. -1 = tło dla hit-or-miss):",
+        ).pack(anchor="w")
+
+        self.morph_se_text = tk.Text(morph, height=4, width=28)
+        self.morph_se_text.pack(fill="x", pady=2)
+        # domyślnie krzyż 3x3
+        self.morph_se_text.insert("1.0", "0 1 0\n1 1 1\n0 1 0")
+
+        mrow1 = ttk.Frame(morph)
+        mrow1.pack(fill="x", pady=(4, 0))
+        ttk.Button(mrow1, text="Dylatacja", command=self.apply_morph_dilate).pack(
+            side="left", padx=2
+        )
+        ttk.Button(mrow1, text="Erozja", command=self.apply_morph_erode).pack(
+            side="left", padx=2
+        )
+
+        mrow2 = ttk.Frame(morph)
+        mrow2.pack(fill="x", pady=(2, 0))
+        ttk.Button(mrow2, text="Otwarcie", command=self.apply_morph_open).pack(
+            side="left", padx=2
+        )
+        ttk.Button(mrow2, text="Domknięcie", command=self.apply_morph_close).pack(
+            side="left", padx=2
+        )
+
+        mrow3 = ttk.Frame(morph)
+        mrow3.pack(fill="x", pady=(2, 2))
+        ttk.Button(
+            mrow3,
+            text="Hit-or-miss (cienienie)",
+            command=self.apply_morph_thin,
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            mrow3,
+            text="Hit-or-miss (pogrubianie)",
+            command=self.apply_morph_thicken,
+        ).pack(side="left", padx=2)
+
     def _bind_canvas(self):
         self.canvas.bind("<Button-1>", self.on_down)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -2254,3 +2299,214 @@ class App(tk.Tk):
 
         self.polygon_editor_win = PolygonEditorWindow(self)
         self.polygon_editor_win.transient(self)
+
+    # --- Zadanie 8: Morfologia obrazów binarnych ---
+
+    def _parse_structuring_element(self):
+        """
+        Parsuje element strukturyzujący z pola tekstowego.
+        Każdy wiersz = linia, wartości oddzielone spacjami.
+        Dozwolone: 0, 1 oraz -1 (tło dla hit-or-miss).
+        Zwraca listę list int.
+        """
+        if not hasattr(self, "morph_se_text") or self.morph_se_text is None:
+            raise ValueError("Brak pola z elementem strukturyzującym w UI.")
+
+        raw = self.morph_se_text.get("1.0", "end").strip()
+        if not raw:
+            raise ValueError("Element strukturyzujący jest pusty.")
+
+        rows = []
+        width = None
+        for line in raw.splitlines():
+            parts = line.strip().split()
+            if not parts:
+                continue
+            try:
+                row = [int(p) for p in parts]
+            except ValueError:
+                raise ValueError(
+                    "Element strukturyzujący może zawierać tylko liczby całkowite "
+                    "(0, 1 oraz opcjonalnie -1)."
+                )
+            if width is None:
+                width = len(row)
+            elif len(row) != width:
+                raise ValueError(
+                    "Wszystkie wiersze elementu strukturyzującego muszą mieć tę samą długość."
+                )
+            rows.append(row)
+
+        if not rows or width is None:
+            raise ValueError("Nie udało się odczytać elementu strukturyzującego.")
+
+        return rows
+
+    def _pixels_to_binary(self, pixels):
+        """Zamienia listę pikseli RGB na obraz binarny 0/1."""
+        bin_img = []
+        for r, g, b in pixels:
+            if (r + g + b) / 3 >= 128:
+                bin_img.append(1)
+            else:
+                bin_img.append(0)
+        return bin_img
+
+    def _binary_to_pixels(self, bin_img):
+        """Zamienia obraz binarny 0/1 na piksele (0 lub 255, RGB)."""
+        pixels = []
+        for v in bin_img:
+            val = 255 if v else 0
+            pixels.append((val, val, val))
+        return pixels
+
+    def _morph_dilate(self, bin_img, w, h, se):
+        kh = len(se)
+        kw = len(se[0])
+        cy = kh // 2
+        cx = kw // 2
+        out = [0] * (w * h)
+
+        for y in range(h):
+            for x in range(w):
+                val = 0
+                for j in range(kh):
+                    for i in range(kw):
+                        if se[j][i] != 1:
+                            continue
+                        xx = x + i - cx
+                        yy = y + j - cy
+                        if 0 <= xx < w and 0 <= yy < h:
+                            if bin_img[yy * w + xx] == 1:
+                                val = 1
+                                break
+                    if val:
+                        break
+                out[y * w + x] = val
+        return out
+
+    def _morph_erode(self, bin_img, w, h, se):
+        kh = len(se)
+        kw = len(se[0])
+        cy = kh // 2
+        cx = kw // 2
+        out = [0] * (w * h)
+
+        for y in range(h):
+            for x in range(w):
+                val = 1
+                for j in range(kh):
+                    for i in range(kw):
+                        if se[j][i] != 1:
+                            continue
+                        xx = x + i - cx
+                        yy = y + j - cy
+                        if not (0 <= xx < w and 0 <= yy < h):
+                            val = 0
+                            break
+                        if bin_img[yy * w + xx] == 0:
+                            val = 0
+                            break
+                    if val == 0:
+                        break
+                out[y * w + x] = val
+        return out
+
+    def _morph_hit_or_miss(self, bin_img, w, h, se):
+        """Hit-or-miss z użyciem wartości 1 (obiekt), -1 (tło), 0 (don't care)."""
+        kh = len(se)
+        kw = len(se[0])
+        cy = kh // 2
+        cx = kw // 2
+        out = [0] * (w * h)
+
+        for y in range(h):
+            for x in range(w):
+                match = True
+                for j in range(kh):
+                    for i in range(kw):
+                        v = se[j][i]
+                        if v == 0:
+                            continue
+                        xx = x + i - cx
+                        yy = y + j - cy
+
+                        if v == 1:
+                            # musi trafić w 1
+                            if not (0 <= xx < w and 0 <= yy < h):
+                                match = False
+                                break
+                            if bin_img[yy * w + xx] != 1:
+                                match = False
+                                break
+                        elif v == -1:
+                            # musi trafić w tło (0); poza obrazem też traktujemy jako tło
+                            if 0 <= xx < w and 0 <= yy < h:
+                                if bin_img[yy * w + xx] != 0:
+                                    match = False
+                                    break
+                    if not match:
+                        break
+                out[y * w + x] = 1 if match else 0
+        return out
+
+    def _apply_morph(self, mode, label):
+        obj = self._require_raster_image()
+        if obj is None:
+            return
+        try:
+            se = self._parse_structuring_element()
+        except ValueError as e:
+            messagebox.showerror("Morfologia", str(e))
+            return
+
+        w = obj.src_w
+        h = obj.src_h
+        bin_img = self._pixels_to_binary(obj.src_pixels)
+
+        if mode == "dilate":
+            out = self._morph_dilate(bin_img, w, h, se)
+        elif mode == "erode":
+            out = self._morph_erode(bin_img, w, h, se)
+        elif mode == "open":
+            tmp = self._morph_erode(bin_img, w, h, se)
+            out = self._morph_dilate(tmp, w, h, se)
+        elif mode == "close":
+            tmp = self._morph_dilate(bin_img, w, h, se)
+            out = self._morph_erode(tmp, w, h, se)
+        elif mode == "thin":
+            hm = self._morph_hit_or_miss(bin_img, w, h, se)
+            out = [
+                1 if (bin_img[i] == 1 and hm[i] == 0) else 0
+                for i in range(len(bin_img))
+            ]
+        elif mode == "thicken":
+            hm = self._morph_hit_or_miss(bin_img, w, h, se)
+            out = [
+                1 if (bin_img[i] == 1 or hm[i] == 1) else 0 for i in range(len(bin_img))
+            ]
+        else:
+            messagebox.showerror("Morfologia", f"Nieznany tryb morfologii: {mode}")
+            return
+
+        obj.src_pixels = self._binary_to_pixels(out)
+        obj.update_canvas(self.surface, self.canvas)
+        self._push_history(label)
+
+    def apply_morph_dilate(self):
+        self._apply_morph("dilate", "Morfologia – dylatacja")
+
+    def apply_morph_erode(self):
+        self._apply_morph("erode", "Morfologia – erozja")
+
+    def apply_morph_open(self):
+        self._apply_morph("open", "Morfologia – otwarcie")
+
+    def apply_morph_close(self):
+        self._apply_morph("close", "Morfologia – domknięcie")
+
+    def apply_morph_thin(self):
+        self._apply_morph("thin", "Morfologia – hit-or-miss (cienienie)")
+
+    def apply_morph_thicken(self):
+        self._apply_morph("thicken", "Morfologia – hit-or-miss (pogrubianie)")
